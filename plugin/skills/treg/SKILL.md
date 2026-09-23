@@ -169,6 +169,21 @@ Notes:
     price, same shape). `catalog_get` shows that price up front as `overflow_price_usd` when the
     deployment can relay the endpoint - a "free" endpoint with one may bill exactly that, so quote
     it. A team opts out with `treg org overflow off`.
+  - **Six jobs are already built as tools. Call the tool, not the chain.** Each is one call on
+    `https://treg.to/call/<id>`, runs the steps below in parallel, returns one fixed shape whichever provider
+    answered, and charges its fee only for what it delivered. Chaining the endpoints yourself costs
+    the same provider money and more calls, and the tool removes duplicates and stops at its
+    budget for you.
+    | you want | call | not this by hand |
+    |---|---|---|
+    | the people at a company, each with a checked email | `treg-hub.lead-pipeline` `{company_domain, title?, limit?, include_phone?}` | people.search → email.find → email.verify per person |
+    | one person's email, found and checked | `treg-hub.verified-email` `{linkedin_url}` or `{full_name, domain}` | email.find → email.verify |
+    | whether AI engines mention a brand | `treg-hub.ai-visibility` `{prompt, brand, brand_domain?, competitors?}` | ChatGPT, Gemini, Copilot, AI Mode one by one, then reading each answer |
+    | company details you can trust | `treg-hub.company-consensus` `{domain}` | two or three companies.enrich providers, then comparing fields |
+    | how strong a site is in Google | `treg-hub.domain-authority` `{domain}` | backlinks summary + ranked keywords + linking domains |
+    | a Search Console property's health (own account) | `treg-hub.search-console-health` `{site}` | performance + sitemaps + url inspection |
+    `catalog_get <id>` shows each one's inputs, output and price line. When the hub is off on this
+    registry these ids answer 404: fall back to the routed endpoints below.
   - **Routed endpoints** (`treg.<capability>`, e.g. `treg.people.email.find`) are where you can
     ask treg to choose: POST the identity (`{full_name, domain}` | `{first_name, last_name, domain}` |
     `{linkedin_url}`); treg runs the best child (own keys first, then cheapest per hit), falls back
@@ -182,6 +197,7 @@ Notes:
     match; only `output.verified: true` means it checked the mailbox. When it is not, the answer
     carries `_treg.advice` naming the verify step (`treg.people.email.verify`, a fraction of a cent)
     — run it before outreach, and never re-send the same find: every hit bills, repeats included.
+    `treg-hub.verified-email` does find + verify in one call and bills its fee only on a usable email.
   - **Verify before you send. Every address, every time.** This includes rows from a company or
     domain search (`treg.people.search`, `hunter.companies.emails`, …): those are directory
     listings, and a row's email is unconfirmed unless that row's own verification field says
@@ -305,7 +321,7 @@ treg tool add supabase --base-url https://<ref>.supabase.co \
 ```
 
 **What a script gets — the whole surface:** `ctx.inputs` (checked against the manifest),
-`ctx.call(target, {method, query, body, headers})` → `{status, headers, json, text}`,
+`ctx.call(target, {method, query, body, headers, timeout_s})` → `{status, headers, json, text, timed_out, cost_usd}` (calls in one `Promise.all` run four at once),
 `ctx.csv(text)` → rows keyed by the header, `ctx.data` → the rows of the `data.csv` uploaded with
 the tool (a fifth file, ≤ 50 MB, read-only; replace it and publish again), and `ctx.log(text)`.
 No network, no files, no `require`; `ctx.call` is the only road out, and `target` must be in the
@@ -323,7 +339,7 @@ Caps: 120 s, 20 calls, 64 MB, four runs at a time per team. A steps recipe inste
   integer `units` your code returns (declare `units` as an output field), capped at `max_price_usd`.
 - `{"mode": "cost_plus", "markup_percent": 30, "max_price_usd": 0.5}` — that percent of the run's
   catalog step cost (the tool must call at least one catalog tool), capped at `max_price_usd`.
-The caller pays your price plus the metered steps; the caller's `X-Treg-Run-Max-Cost` caps the whole run.
+The caller pays your price plus the metered steps; the caller's `X-Treg-Run-Max-Cost` caps the whole run, and when the caller sends none your `limits.cost_usd` does (else $1.00). A run that passes the cap is stopped and returns nothing, so a script that makes several paid calls should add up `cost_usd` and stop early.
 
 **The road:**
 

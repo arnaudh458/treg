@@ -127,6 +127,23 @@ Notes:
     price, same shape). `catalog_get` shows that price up front as `overflow_price_usd` when the
     deployment can relay the endpoint - a "free" endpoint with one may bill exactly that, so quote
     it. A team opts out with `treg org overflow off`.
+<!--hub-->
+  - **Six jobs are already built as tools. Call the tool, not the chain.** Each is one call on
+    `{BASE}/call/<id>`, runs the steps below in parallel, returns one fixed shape whichever provider
+    answered, and charges its fee only for what it delivered. Chaining the endpoints yourself costs
+    the same provider money and more calls, and the tool removes duplicates and stops at its
+    budget for you.
+    | you want | call | not this by hand |
+    |---|---|---|
+    | the people at a company, each with a checked email | `treg-hub.lead-pipeline` `{company_domain, title?, limit?, include_phone?}` | people.search → email.find → email.verify per person |
+    | one person's email, found and checked | `treg-hub.verified-email` `{linkedin_url}` or `{full_name, domain}` | email.find → email.verify |
+    | whether AI engines mention a brand | `treg-hub.ai-visibility` `{prompt, brand, brand_domain?, competitors?}` | ChatGPT, Gemini, Copilot, AI Mode one by one, then reading each answer |
+    | company details you can trust | `treg-hub.company-consensus` `{domain}` | two or three companies.enrich providers, then comparing fields |
+    | how strong a site is in Google | `treg-hub.domain-authority` `{domain}` | backlinks summary + ranked keywords + linking domains |
+    | a Search Console property's health (own account) | `treg-hub.search-console-health` `{site}` | performance + sitemaps + url inspection |
+    `catalog_get <id>` shows each one's inputs, output and price line. When the hub is off on this
+    registry these ids answer 404: fall back to the routed endpoints below.
+<!--/hub-->
 <!--routed-->
   - **Routed endpoints** (`treg.<capability>`, e.g. `treg.people.email.find`) are where you can
     ask treg to choose: POST the identity (`{full_name, domain}` | `{first_name, last_name, domain}` |
@@ -141,6 +158,9 @@ Notes:
     match; only `output.verified: true` means it checked the mailbox. When it is not, the answer
     carries `_treg.advice` naming the verify step (`treg.people.email.verify`, a fraction of a cent)
     — run it before outreach, and never re-send the same find: every hit bills, repeats included.
+<!--hub-->
+    `treg-hub.verified-email` does find + verify in one call and bills its fee only on a usable email.
+<!--/hub-->
   - **Verify before you send. Every address, every time.** This includes rows from a company or
     domain search (`treg.people.search`, `hunter.companies.emails`, …): those are directory
     listings, and a row's email is unconfirmed unless that row's own verification field says

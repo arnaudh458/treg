@@ -225,6 +225,22 @@ on the MCP `call` result (a team can opt out with `treg org overflow off`). `cat
 relay price up front as `overflow_price_usd` when the deployment can relay the endpoint: a "free"
 endpoint with one may bill exactly that, so quote it. Your own keys are never relayed.
 
+<!--hub-->
+**Six jobs are already built as tools: call the tool, not the chain.** Each is one
+`POST {BASE}/call/<id>`, runs its steps in parallel, returns one fixed shape whichever provider
+answered, and charges its fee only for what it delivered. `treg-hub.lead-pipeline`
+`{company_domain, title?, limit?, include_phone?}`: the people at a company, each with a checked
+email (not people.search → email.find → email.verify per person by hand).
+`treg-hub.verified-email` `{linkedin_url}` or `{full_name, domain}`: one person's email, found and
+checked. `treg-hub.ai-visibility` `{prompt, brand, brand_domain?, competitors?}`: whether ChatGPT,
+Gemini, Copilot and Google AI Mode mention a brand, judged, not text-matched.
+`treg-hub.company-consensus` `{domain}`: company details from two providers with a per-field
+agreement score. `treg-hub.domain-authority` `{domain}`: backlinks, referring domains, ranked
+keywords and a verdict. `treg-hub.search-console-health` `{site}`: a Search Console property's
+health on the caller's own Google account. `catalog_get <id>` shows inputs, output and price. When
+the hub is off on this registry the ids answer 404: use the routed endpoints below.
+<!--/hub-->
+
 <!--routed-->
 **Routed endpoints — when you WANT treg to choose.** `treg.<capability>` rows (today:
 `treg.people.email.find`) are first-party endpoints generated from the providers of one capability.
@@ -242,6 +258,9 @@ A found contact is not a confirmed one: an email or phone find is the provider's
 only `output.verified: true` means it checked the mailbox. Otherwise the answer carries
 `_treg.advice` naming the verify step (`treg.people.email.verify`, a fraction of a cent) — run it
 before outreach, and never re-send the same find: every hit bills, repeats included.
+<!--hub-->
+`treg-hub.verified-email` does find + verify in one call and bills its fee only on a usable email.
+<!--/hub-->
 Verify before you send, every address, every time — including rows from a company or domain
 search (`treg.people.search`, `hunter.companies.emails`): those are directory listings, and a
 row's email is unconfirmed unless that row's own verification field says so. `invalid` is dead,
