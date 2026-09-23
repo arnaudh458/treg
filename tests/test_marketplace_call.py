@@ -1062,6 +1062,16 @@ def test_aviato_bulk_settles_from_counts_and_simple_search_releases_unbilled_rid
                                                   b'{"id":"4"},{"id":"5"}]}') == 2_500
 
 
+@pytest.mark.parametrize("endpoint", ["companyenrich.people.search", "companyenrich.people.search.scroll"])
+def test_companyenrich_people_search_settles_per_person_returned_with_a_one_person_minimum(endpoint):
+    """Live 2026-09-23: an empty people search settled at the whole requested page ($0.196 for ten
+    people, zero returned). CompanyEnrich bills 2 credits per person returned, 2 on an empty page."""
+    mk = _mk("companyenrich", endpoint_id=endpoint, cost_type="per_result", unit_micro=19_600)
+    assert call_settle._observed_cost_micro(mk, b'{"items": [], "totalItems": 0}') == 19_600
+    assert call_settle._observed_cost_micro(mk, b'{"items": [{"id": 1}, {"id": 2}, {"id": 3}]}') == 58_800
+    assert call_settle._observed_cost_micro(mk, b'{"error": "x"}') is None
+
+
 def test_aviato_single_enrich_releases_documented_but_live_unbilled_riders():
     company = _mk("aviato", endpoint_id="aviato.companies.enrich", unit_micro=150_000)
     assert call_settle._observed_cost_micro(company, b'{"id":"company"}') == 150_000

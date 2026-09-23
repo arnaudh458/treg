@@ -2326,7 +2326,11 @@ to choose (`docs/CAPABILITY-ROUTING-PLAN.md`). Everything else in the catalog st
   since 2026-09-07 a per_call rejection settles only at a charge the vendor itself reports, so this
   is a bound on the reported-charge risk, not on the estimate — see money.md)
   — never the same provider again, within the error bound; if every one rejects it, the caller
-  gets `route_caller_fault` naming each attempt. A 4xx the endpoint's YAML declares as its
+  gets `route_caller_fault` naming each attempt. When another provider already ANSWERED the same
+  question (a hit, weak hit or miss), the question is valid and the 4xx is that provider's own: it
+  is recorded as `rejected` and the waterfall goes on like any provider error, so the rows already
+  answered are still returned (live 2026-09-23: prospeo's 400 after two answers ended a
+  people.search as the caller's 400). A miss plus `rejected` attempts ends as a 200 miss. A 4xx the endpoint's YAML declares as its
   "no result" status (`miss: {status: 404}` or `miss: {status: 400, when: …}`, see "`miss`
   semantics ride on the endpoint") is a MISS instead, not a fault. An adapter method
   (`to_upstream`, `from_upstream`, `is_miss`) that throws is recorded as an error attempt and the
@@ -2342,8 +2346,16 @@ to choose (`docs/CAPABILITY-ROUTING-PLAN.md`). Everything else in the catalog st
   under a 20000 envelope). A
   MISS tries the next candidate — the waterfall is ON by default (decided
   2026-08-28: the endpoint's job is to find the thing, and misses on the per-success children are
-  free); `X-Treg-Route-Waterfall: 0` stops at the first miss. Every attempt is settled at its real
-  price and `X-Treg-Route-Max-Cost` (default $1) bounds the sum before each reserve (a candidate
+  free); `X-Treg-Route-Waterfall: 0` stops at the first miss. **A child never settles its own
+  hold**: it leaves it open in the parent's `deferred_settles` list (`settle.DeferredSettle`) with
+  the amount its settle would charge, and `run_routed` closes every one exactly once at the end
+  (`settle.close_deferred`, one transaction): settled at that real price when the routed call
+  answers (a hit or a 200 miss), RELEASED when it fails (`route_failed`, `route_caller_fault`,
+  `route_max_cost`, a balance refusal, a cancellation). A routed call that fails therefore charges
+  nothing (owner decision 2026-09-21): its error detail says `charged_micro: 0` and
+  `released_micro` names what the providers billed treg. A crash between the two leaves the holds
+  to the reaper, which releases in the caller's favour. `X-Treg-Route-Max-Cost` (default $1)
+  bounds the sum before each reserve (a candidate
   that would breach it is `skipped`). Quota-row quotes scale with the requested row count, just
   like per-result quotes. Each child also receives the remaining ceiling after actual earlier
   charges; the shared reservation gate checks the resolved estimate including margin, even when
@@ -2356,8 +2368,8 @@ to choose (`docs/CAPABILITY-ROUTING-PLAN.md`). Everything else in the catalog st
   Response: `{output, raw, _treg: {served_by, provider, tier,
   outcome, tried[], charged_micro, capped?}}`, `X-Treg-Served-By`, `X-Treg-Providers-Tried`,
   `X-Treg-Route-Outcome`, `X-Treg-Route-Capped?`, `X-Treg-Cost-Micro` = the sum, one `X-Treg-Call-Id`. The parent owns
-  the idempotency label (a success, or a terminal failure after a paid child, replays without
-  touching a provider) and writes one audit row
+  the idempotency label (a success replays without touching a provider; a failure now costs
+  nothing, so it is not stored and a retry with the same key tries again) and writes one audit row
   (`credential_tier: routed`) beside the children's.
 - **Hit rate** — `CallRecord.hit` (nullable, alembic `0009`, last column) is the adapter's verdict
   written at settle; `stats.observed` publishes `hit_rate`/`hit_samples` (floor 20) and, for

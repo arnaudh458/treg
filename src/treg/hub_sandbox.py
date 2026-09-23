@@ -60,7 +60,7 @@ globalThis.ctx = {
   call: async function (target, opts) {
     const reply = JSON.parse(__bridge_call(JSON.stringify([String(target), opts || {}])));
     if (reply.op === "refused") { throw new Error(reply.error); }
-    return { status: reply.status, headers: reply.headers, json: reply.json, text: reply.text, truncated: !!reply.truncated };
+    return { status: reply.status, headers: reply.headers, json: reply.json, text: reply.text, truncated: !!reply.truncated, cost_usd: reply.cost_usd || 0 };
   },
   csv: __csv,
   log: function (text) { __bridge_log(String(text)); },

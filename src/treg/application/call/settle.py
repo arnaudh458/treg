@@ -8,6 +8,7 @@ import logging
 import math
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from sqlalchemy import update
 from sqlalchemy.exc import DBAPIError, TimeoutError as PoolTimeoutError
@@ -386,6 +387,15 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
                 and credits >= 0 and rate):
             return int(credits * rate * 1_000_000 + 0.5)
         return None
+    if provider == "companyenrich" and mk.endpoint_id in (
+            "companyenrich.people.search", "companyenrich.people.search.scroll") and mk.unit_micro > 0:
+        # 2 credits per person RETURNED, with a 2-credit minimum on an empty page (catalog note,
+        # verified 2026-08-20). The estimate prices the whole requested pageSize, so without this
+        # an empty search settled at ten people (live 2026-09-23: $0.196 for zero rows).
+        rows = doc.get("items")
+        if isinstance(rows, list):
+            return max(1, sum(item is not None for item in rows)) * mk.unit_micro
+        return None
     if provider == "aviato" and mk.endpoint_id == "aviato.companies.enrich.bulk":
         rows = doc.get("companies")
         if isinstance(rows, list) and mk.unit_micro > 0:
@@ -736,6 +746,25 @@ async def _platform_settle(
         actual = actual * repeat_percent // 100
     call_id, mk.call_id = mk.call_id, None  # closing is once-only, even if two paths try
     charged = 0
+    if (mk.deferred is not None and overflow_spend is None and observed_override is None
+            and status_code is not None):
+        # A routed child: the parent decides whether the caller pays (a routed call that fails
+        # charges nothing). Leave the hold open, hand the parent what this settle WOULD do, and
+        # tell the child it is finished. The parent closes it exactly once (`close_deferred`);
+        # a crash in between leaves the hold to the reaper, which releases in the caller's favour.
+        mk.deferred.append(DeferredSettle(
+            call_id=call_id, billable=billable, actual_micro=actual, archive_use=archive_use,
+            reason=reason or f"not_billable_{status_code}",
+            meta={"provider": mk.provider, "status_code": status_code, "cost_type": mk.cost_type,
+                  "cost_source": ("provider" if observed is not None else
+                                  mk.settlement_basis.get("amount", {}).get("kind", "estimate")),
+                  **({"cached": True, "cache_price_percent": repeat_percent if cached_repeat else 100}
+                     if cached_hit else {})}))
+        if finalized is not None:
+            finalized()
+        would = (ledger.with_margin(actual) if actual is not None
+                 else ledger.with_margin(mk.estimate_micro)) if billable else 0
+        return would, observed
 
     async def _close() -> int:
         async with session_maker() as db:
@@ -783,6 +812,47 @@ async def _platform_settle(
             "settle/release failed for call %s (%s, status %s): %s",
             call_id, mk.endpoint_id, status_code, exc, exc_info=True)
     return charged, observed
+
+
+@dataclass
+class DeferredSettle:
+    """One routed child's hold, left open for its parent to close (`close_deferred`)."""
+
+    call_id: str
+    billable: bool
+    actual_micro: int | None
+    archive_use: tuple[int, str] | None
+    reason: str
+    meta: dict
+
+
+async def close_deferred(items: list[DeferredSettle], *, charge: bool, why: str = "") -> int:
+    """Close every hold a routed call's children left open, exactly once each, in one transaction.
+    `charge=True` settles each billable one as its own settle would have; `charge=False` releases all
+    of them, because a routed call that fails charges the caller nothing. Returns what was charged.
+    Never raises: a hold that fails to close is released later by the reaper, in the caller's favour."""
+    if not items:
+        return 0
+    pending, items[:] = list(items), []
+    total = 0
+    try:
+        async with session_maker() as db:
+            for d in pending:
+                if charge and d.billable:
+                    total += await ledger.settle_in_transaction(db, d.call_id, d.actual_micro, meta=d.meta)
+                    if d.archive_use is not None:
+                        await archive.note_org_use_in_transaction(db, d.archive_use[0], d.archive_use[1])
+                else:
+                    await ledger.release_in_transaction(
+                        db, d.call_id, reason=d.reason if charge else (why or "routed_call_failed"),
+                        meta=d.meta)
+            await db.commit()
+    except Exception as exc:  # noqa: BLE001 — loudly, but never into the caller's response
+        logging.getLogger("treg.ledger").error(
+            "closing %d deferred routed holds (charge=%s) failed: %s", len(pending), charge, exc,
+            exc_info=True)
+        return 0
+    return total
 
 
 async def _finish_cancelled_call(

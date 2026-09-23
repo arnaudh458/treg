@@ -647,8 +647,9 @@ still pay the provider twice.
   Neither a global nor an org-wide key safely separates independent callers.
 - A short application transaction claims a pending row before relay. The unique constraint
   arbitrates concurrent claims; the loser gets 409. Reusing a label with another fingerprint is 422.
-- Metered successes and partially charged routed failures retain status, body, charge and call id
-  for 24 hours. Uncharged failures, BYOK calls and owned free polls release the label immediately.
+- Metered successes retain status, body, charge and call id for 24 hours. Uncharged failures
+  (every routed failure since routed children defer their holds to the parent, catalog.md), BYOK
+  calls and owned free polls release the label immediately, so a retry tries again.
 - Replays return `X-Treg-Idempotent-Replay: true` and the original `X-Treg-Cost-Micro`;
   MCP returns `replayed: true`. An async submission replay repeats its original reservation.
 - Refusal and cancellation cleanup return an acquired label. Expired entries are swept lazily,

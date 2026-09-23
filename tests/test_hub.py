@@ -1082,3 +1082,31 @@ async def test_the_dashboard_carries_the_listing_tab(clients: AsyncClient, hub_o
     for needle in ("Listed in the catalog", "Public run log on the share page", "setHubFlag('listed'", "setHubFlag('public_log'",
                    "hub.tab==='listing'"):
         assert needle in page, needle
+
+
+# ---------------------------------------------------------------------------------------------
+# The run ceiling a tool declares, and the cost a script can see (built with lead-pipeline)
+
+def test_the_run_ceiling_comes_from_the_caller_then_the_tool_then_one_dollar():
+    from treg.application.hub.runner import _ceiling
+    assert _ceiling(None) == 1_000_000                      # nothing declared: $1.00
+    assert _ceiling(None, 3.0) == 3_000_000                 # the tool's own limits.cost_usd
+    assert _ceiling("0.5", 3.0) == 500_000                  # the caller's header always wins
+
+
+async def test_a_script_sees_what_each_call_cost(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """A script keeps its own budget from `cost_usd` on each ctx.call result, because a run that
+    passes its ceiling is stopped by treg and returns nothing. The x-treg-* headers stay hidden."""
+    monkeypatch.setattr(call_service, "relay", _fake_relay(200, b'{"data": [1]}'))
+    m = _script_manifest(uses=[EP], output={"fields": ["rows", "count"]})
+    script = ("export default async function run(ctx) {"
+              f"  const r = await ctx.call({EP!r}, {{ query: {{ aweme_id: 'x' }} }});"
+              "  return { rows: [r.cost_usd, Object.keys(r.headers).filter(k => k.startsWith('x-treg-')).length], count: 1 };"
+              "}")
+    r = await clients.post("/hub/tools", json={"manifest": m, "script": script, "readme": "x",
+                                               "check": {"inputs": {}, "fields": ["rows"]}})
+    assert r.status_code == 201, r.text
+    token = (await funded_user(clients, "cost-seen@example.com"))["token"]
+    run = await clients.post(f"/call/{r.json()['tool_id']}", json={}, headers={"X-Treg-Token": token})
+    assert run.status_code == 200, run.text
+    assert run.json()["output"]["rows"] == [0.001, 0]        # the step's $0.001, and no x-treg header

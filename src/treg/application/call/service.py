@@ -595,6 +595,7 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
             raise
         tool, upstream_url, drop_params = mk.tool, mk.upstream, mk.consumed
         request.context.marketplace = mk
+        mk.deferred = request.context.deferred_settles
     try:
         await _await_before_reserve(
             authorize_call(
@@ -802,6 +803,8 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
             read_body=request.body,
         ), request, call_ref)
 
+    if mk is not None:
+        mk.deferred = request.context.deferred_settles
     if mk is not None and mk.metered:
         _set_caller_max_cost(request, mk)
 

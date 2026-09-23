@@ -408,7 +408,12 @@ and `200` when it is on.
   output field, capped at max); `{"mode":"cost_plus","markup_percent":30,"max_price_usd":0.5}` (that
   percent of the run's catalog step cost, needs one catalog tool in `uses`, capped at max). The
   caller pays your price plus the metered steps.
-- A script gets `ctx.inputs`, `ctx.call(target, {method, query, body, headers})`, `ctx.csv(text)`,
+- **The run's spending cap** is the caller's `X-Treg-Run-Max-Cost`; when the caller sends none, the
+  tool's own `"limits": {"cost_usd": 3}` in recipe.json; else $1.00. A run that would pass it is
+  stopped and returns nothing, so a script making several paid calls adds up each result's
+  `cost_usd` and stops early, returning what it has.
+- A script gets `ctx.inputs`, `ctx.call(target, {method, query, body, headers})` → `{status,
+  headers, json, text, cost_usd}`, `ctx.csv(text)`,
   `ctx.data` (the rows of the `data.csv` uploaded with the tool, ≤ 50 MB, read-only) and `ctx.log`;
   no network, no files, no `require`. `target` must be in the manifest's `uses`: a catalog id, one
   of the team's own tools as `<tool>/<path>`, or a full URL under that tool's base URL. Your own

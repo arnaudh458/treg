@@ -723,25 +723,21 @@ async def test_idempotent_replay_of_a_routed_call_never_calls_a_provider_twice(c
     assert r2.json() == r1.json() and len(seen) == 1
 
 
-@pytest.mark.parametrize(
-    ("terminal", "expected_status", "expected_error"),
-    [
-        ((400, {"message": "invalid email"}), 400, "route_caller_fault"),
-        ((503, {"message": "provider down"}), 502, "route_failed"),
-    ],
-)
-async def test_idempotent_replay_preserves_a_routed_failure_after_partial_charge(
-    clients: AsyncClient, enrichment_on, monkeypatch, terminal, expected_status, expected_error,
+async def test_a_routed_call_that_fails_charges_nothing_and_a_retry_tries_again(
+    clients: AsyncClient, enrichment_on, monkeypatch,
 ):
+    """Owner decision 2026-09-21: a routed call that fails charges the caller nothing. Here tomba
+    answers (a billed miss) and leadmagic is down: the call ends 502 `route_failed` and tomba's hold
+    is RELEASED rather than settled. A failure that cost nothing is not stored for replay (only a
+    charged answer is), so a retry with the same key tries again: and is free again."""
     routed = "treg.people.email.verify"
     tomba_miss = (200, {"data": {"email": {"status": None, "score": None}}})
+    down = (503, {"message": "provider down"})
     seen = []
     monkeypatch.setattr(call_service, "relay", _relay_by_provider(
-        {"tomba": [tomba_miss, tomba_miss], "leadmagic": [terminal, terminal]},
-        seen,
-    ))
+        {"tomba": [tomba_miss, tomba_miss], "leadmagic": [down, down]}, seen))
     headers = {
-        "Idempotency-Key": "route-partially-charged-failure",
+        "Idempotency-Key": "route-failure-is-free",
         "X-Treg-Route-Prefer": "tomba,leadmagic",
         "X-Treg-Route-Exclude": "hunter",
     }
@@ -750,12 +746,41 @@ async def test_idempotent_replay_preserves_a_routed_failure_after_partial_charge
     r1 = await clients.post(f"/call/{routed}", json={"email": "bad@example.com"}, headers=headers)
     r2 = await clients.post(f"/call/{routed}", json={"email": "bad@example.com"}, headers=headers)
 
-    assert r1.status_code == expected_status and r1.json()["detail"]["error"] == expected_error
-    assert r2.status_code == r1.status_code and r2.json() == r1.json()
-    assert r2.headers.get("X-Treg-Idempotent-Replay") == "true"
-    assert r1.headers["X-Treg-Cost-Micro"] == r2.headers["X-Treg-Cost-Micro"] == "8900"
-    assert before - await _balance(clients) == 8_900
-    assert [provider for provider, *_ in seen] == ["tomba", "leadmagic"]
+    assert r1.status_code == 502 and r1.json()["detail"]["error"] == "route_failed"
+    detail = r1.json()["detail"]
+    assert detail["charged_micro"] == 0 and detail["released_micro"] == 8_900
+    assert all(a["charged_micro"] == 0 for a in detail["tried"])
+    assert r1.headers["X-Treg-Cost-Micro"] == "0"
+    assert before - await _balance(clients) == 0
+    assert r2.status_code == 502 and r2.headers.get("X-Treg-Idempotent-Replay") is None
+    assert r2.json()["detail"]["charged_micro"] == 0
+    assert before - await _balance(clients) == 0
+    assert [provider for provider, *_ in seen] == ["tomba", "leadmagic", "tomba", "leadmagic"]
+
+
+async def test_a_400_after_another_provider_answered_is_that_providers_own_rejection(
+    clients: AsyncClient, enrichment_on, monkeypatch,
+):
+    """Live 2026-09-23: prospeo's 400 after two providers had answered ended a people.search as the
+    caller's 400 and threw away rows the caller had paid for. When another provider already
+    answered the same question, the question is valid: the 400 is recorded as `rejected` and the
+    call ends on what the others said (here a 200 miss, charged as a miss is)."""
+    routed = "treg.people.email.verify"
+    tomba_miss = (200, {"data": {"email": {"status": None, "score": None}}})
+    bad = (400, {"message": "invalid email"})
+    seen = []
+    monkeypatch.setattr(call_service, "relay", _relay_by_provider(
+        {"tomba": [tomba_miss], "leadmagic": [bad]}, seen))
+    headers = {"X-Treg-Route-Prefer": "tomba,leadmagic", "X-Treg-Route-Exclude": "hunter"}
+    before = await _balance(clients)
+
+    r = await clients.post(f"/call/{routed}", json={"email": "bad@example.com"}, headers=headers)
+
+    assert r.status_code == 200
+    body = r.json()["_treg"]
+    assert body["outcome"] == "miss"
+    assert [a["outcome"] for a in body["tried"]] == ["miss", "rejected"]
+    assert before - await _balance(clients) == 8_900 == int(r.headers["X-Treg-Cost-Micro"])
 
 
 def test_a_per_success_miss_settles_at_zero_when_the_adapter_can_tell():

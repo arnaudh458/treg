@@ -266,7 +266,7 @@ treg tool add supabase --base-url https://<ref>.supabase.co \
 ```
 
 **What a script gets — the whole surface:** `ctx.inputs` (checked against the manifest),
-`ctx.call(target, {method, query, body, headers})` → `{status, headers, json, text}`,
+`ctx.call(target, {method, query, body, headers})` → `{status, headers, json, text, cost_usd}`,
 `ctx.csv(text)` → rows keyed by the header, `ctx.data` → the rows of the `data.csv` uploaded with
 the tool (a fifth file, ≤ 50 MB, read-only; replace it and publish again), and `ctx.log(text)`.
 No network, no files, no `require`; `ctx.call` is the only road out, and `target` must be in the
@@ -284,7 +284,7 @@ Caps: 120 s, 20 calls, 64 MB, four runs at a time per team. A steps recipe inste
   integer `units` your code returns (declare `units` as an output field), capped at `max_price_usd`.
 - `{"mode": "cost_plus", "markup_percent": 30, "max_price_usd": 0.5}` — that percent of the run's
   catalog step cost (the tool must call at least one catalog tool), capped at `max_price_usd`.
-The caller pays your price plus the metered steps; the caller's `X-Treg-Run-Max-Cost` caps the whole run.
+The caller pays your price plus the metered steps; the caller's `X-Treg-Run-Max-Cost` caps the whole run, and when the caller sends none your `limits.cost_usd` does (else $1.00). A run that passes the cap is stopped and returns nothing, so a script that makes several paid calls should add up `cost_usd` and stop early.
 
 **The road:**
 

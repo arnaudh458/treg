@@ -108,8 +108,8 @@ references (never declared), refuses cycles and unknown steps, and keeps each st
 
 `POST /call/<team>.<name>` with the inputs as the JSON body. The runner coerces the inputs once
 (defaults, types, ints clamped to `min..max`, unknown or missing required → 422
-`hub_input_invalid` naming the field), reads the ceiling from `X-Treg-Run-Max-Cost` (default
-$1.00, price plus steps, counting what is in flight), opens the price hold, then runs the road:
+`hub_input_invalid` naming the field), reads the ceiling from `X-Treg-Run-Max-Cost`, else from the tool's own `limits.cost_usd` (its
+maker knows what one run costs), else $1.00 (price plus steps, counting what is in flight), opens the price hold, then runs the road:
 
 - **JSON road:** every ready step starts, four at a time, waiting on whichever finishes first;
   `for_each` fans a step into counted units; `skip_if_empty`; `allow_fail`.
@@ -148,7 +148,9 @@ HOME, its own process group, POSIX rlimits (CPU, file size, no core, RLIMIT_AS o
 wall-clock kill, the whole group killed on every exit. Inside, QuickJS (the `quickjs` package,
 server extra) has no network, no file system, no `require`, no `process`, no timers; the engine's
 heap is capped at 64 MB. The whole surface a script gets: `ctx.inputs`, `ctx.call(target,
-{method, query, body, headers})` → `{status, headers, json, text}`, `ctx.csv(text)` → rows
+{method, query, body, headers})` → `{status, headers, json, text, truncated, cost_usd}` (the x-treg-*
+headers are removed; `cost_usd` is what that call charged, so a script can keep its own budget and
+stop before the ceiling: a run that passes it is stopped by treg and returns nothing), `ctx.csv(text)` → rows
 keyed by the header (RFC 4180), `ctx.data` → the rows of `data.csv` (≤ 5 MB, parsed once per run in the
 parent), `ctx.log(text)` (50 lines × 2 KB). `ctx.call` crosses to the parent as one JSON line
 over stdin/stdout; the parent enforces `uses` per call (a call outside the list is refused and

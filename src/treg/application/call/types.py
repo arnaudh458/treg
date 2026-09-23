@@ -251,6 +251,9 @@ class CallContext:
     audited: bool = False
     cached: bool = False
     cost_micro: int | None = None
+    # Set by a routed parent on each child: the child leaves its hold OPEN here instead of settling,
+    # and the parent charges or releases every one at the end (route.py `_close_deferred`).
+    deferred_settles: list | None = None
 
 
 @dataclass(frozen=True)

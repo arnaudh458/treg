@@ -168,7 +168,7 @@ async def run_hub_tool(
     except InputError as exc:
         raise ResolutionFailed("hub_input_invalid", status_code=422, detail={
             "error": "hub_input_invalid", "field": exc.field, "rule": exc.rule})
-    ceiling = _ceiling(get_header(RUN_MAX_COST_HEADER))
+    ceiling = _ceiling(get_header(RUN_MAX_COST_HEADER), manifest["limits"].get("cost_usd"))
     maker = await _maker_snapshot(parent, tool)
     catalog = catalog_store.load()
     own_tools = {u for u in manifest["uses"] if "." not in u}
@@ -477,8 +477,12 @@ def _reserved(running: dict, pending: dict, estimate) -> int:
 MAX_RUN_MAX_COST_MICRO = 1_000_000_000   # $1,000: above it the header is a mistake, not a budget
 
 
-def _ceiling(raw: str | None) -> int:
+def _ceiling(raw: str | None, tool_default_usd: float | None = None) -> int:
+    """The run's spending ceiling: the caller's `X-Treg-Run-Max-Cost` when sent, else the tool's own
+    `limits.cost_usd` (its maker knows what one run costs), else $1.00."""
     if not raw:
+        if tool_default_usd:
+            return int(round(float(tool_default_usd) * 1_000_000))
         return DEFAULT_RUN_MAX_COST_MICRO
     try:
         value = float(raw)
@@ -767,8 +771,11 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
                             error=None if ok else _short(doc if doc is not None else raw[:300].decode("utf-8", "replace"))))
         headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in response.raw_headers
                    if not k.lower().startswith(b"x-treg-")}
+        # `cost_usd` is what this call charged the caller, so a script can keep its own budget: the
+        # x-treg-* headers above are treg's and stay hidden, but the amount is the script's business.
         return {"status": response.status, "headers": headers, "json": doc,
-                "text": raw[:MAX_TEXT].decode("utf-8", "replace"), "truncated": truncated}
+                "text": raw[:MAX_TEXT].decode("utf-8", "replace"), "truncated": truncated,
+                "cost_usd": charged / 1_000_000}
 
     data_rows = _csv_rows(tool.data) if getattr(tool, "data", None) else None
     try:
