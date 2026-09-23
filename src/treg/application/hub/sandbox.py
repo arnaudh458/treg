@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover — Windows
 MEMORY_MB = 64                 # the engine's own heap cap
 PROCESS_RSS_MB = 512           # the whole child process: interpreter + engine + buffers
 MAX_CALLS = 20
+MAX_PARALLEL = 4                   # ctx.calls in flight at once, the JSON road's width
 MAX_LOG_LINES = 50
 MAX_LOG_CHARS = 2000
 MAX_OUTPUT_BYTES = 2_000_000
@@ -120,14 +121,71 @@ async def run_script(
                                      ensure_ascii=False) + "\n").encode())
         await proc.stdin.drain()
         deadline = asyncio.get_running_loop().time() + wall_s + 2
+        # Calls run as tasks, MAX_PARALLEL at a time (the JSON road's width), and each reply goes
+        # back to the child by id the moment its task finishes: five calls in one Promise.all are
+        # five in flight. The child's stdout is read by one reader task so a reply write and a
+        # pending readline never contend. A refused call still ends the run, as before.
+        sem = asyncio.Semaphore(MAX_PARALLEL)
+        in_flight: set[asyncio.Task] = set()
+        failure: SandboxError | None = None
+
+        async def write(reply: dict) -> None:
+            proc.stdin.write((json.dumps(reply, ensure_ascii=False) + "\n").encode())
+            await proc.stdin.drain()
+
+        async def one_call(msg: dict) -> None:
+            nonlocal failure
+            cid = msg.get("id")
+            async with sem:
+                try:
+                    opts = msg.get("opts") or {}
+                    if not isinstance(opts, dict):
+                        raise SandboxError("refused", "ctx.call's second argument must be an object")
+                    left = deadline - asyncio.get_running_loop().time()
+                    if left <= 0:
+                        raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock")
+                    # `timeout_s` on ctx.call: the script's own limit for THIS call. Passing it is
+                    # not a run failure: the call answers status 0 with `timed_out: true` and the
+                    # script decides (an engine that did not answer in 60 s is "did not answer",
+                    # the other four still count). The cancelled child releases its hold.
+                    own = opts.get("timeout_s")
+                    own = float(own) if isinstance(own, (int, float)) and not isinstance(own, bool) and own > 0 else None
+                    budget = min(left, own) if own is not None else left
+                    try:
+                        result = await asyncio.wait_for(
+                            execute(CallRequest(target=str(msg.get("target", "")), opts=opts)), timeout=budget)
+                    except asyncio.TimeoutError:
+                        if own is not None and budget < left:
+                            result = {"status": 0, "headers": {}, "json": None, "text": "",
+                                      "timed_out": True, "cost_usd": 0}
+                        else:
+                            raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock during a call") from None
+                    await write({"op": "result", "id": cid, **result})
+                except SandboxError as exc:
+                    failure = failure or exc
+                    try:
+                        await write({"op": "refused", "id": cid, "error": exc.message})
+                    except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                        pass
+
+        reader = asyncio.ensure_future(proc.stdout.readline())
         while True:
             left = deadline - asyncio.get_running_loop().time()
             if left <= 0:
                 raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock")
+            if failure is not None:
+                raise failure
+            done, _ = await asyncio.wait({reader, *in_flight}, timeout=left, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock")
+            for task in list(in_flight):
+                if task in done:
+                    in_flight.discard(task)
+                    task.result()          # SandboxError was captured into `failure`; anything else is a bug
+            if reader not in done:
+                continue
             try:
-                line = await asyncio.wait_for(proc.stdout.readline(), timeout=left)
-            except asyncio.TimeoutError:
-                raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock") from None
+                line = reader.result()
             except ValueError:
                 # readline's limit: one bridge line over MAX_LINE_BYTES (a call body or a log the
                 # engine could build but the bridge will not carry)
@@ -138,6 +196,7 @@ async def run_script(
                     # the maker reads this line; a server traceback with paths is not theirs to read
                     err = "the sandbox stopped (out of memory, or an internal error)"
                 raise SandboxError("script", err[-600:] or "the sandbox exited without an answer")
+            reader = asyncio.ensure_future(proc.stdout.readline())
             try:
                 msg = json.loads(line)
             except ValueError:
@@ -148,37 +207,11 @@ async def run_script(
                     log.append(str(msg.get("text", ""))[:MAX_LOG_CHARS])
             elif op == "call":
                 calls += 1
-                opts = msg.get("opts") or {}
-                if not isinstance(opts, dict):
-                    reply = {"op": "refused", "id": msg.get("id"), "error": "ctx.call's second argument must be an object"}
-                    proc.stdin.write((json.dumps(reply) + "\n").encode())
-                    await proc.stdin.drain()
-                    raise SandboxError("refused", reply["error"])
-                req = CallRequest(target=str(msg.get("target", "")), opts=opts)
                 if calls > MAX_CALLS:
-                    reply = {"op": "refused", "id": msg["id"],
-                             "error": f"the run passed its cap of {MAX_CALLS} calls"}
-                    proc.stdin.write((json.dumps(reply) + "\n").encode())
-                    await proc.stdin.drain()
-                    raise SandboxError("refused", reply["error"])
-                try:
-                    # the wall clock keeps running while the step is in flight: an upstream that
-                    # answers one byte at a time must not hold the run, the slot and the memory
-                    left = deadline - asyncio.get_running_loop().time()
-                    if left <= 0:
-                        raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock")
-                    try:
-                        result = await asyncio.wait_for(execute(req), timeout=left)
-                    except asyncio.TimeoutError:
-                        raise SandboxError("timeout", f"the run passed its {wall_s} s wall clock during a call") from None
-                    reply = {"op": "result", "id": msg["id"], **result}
-                except SandboxError as exc:
-                    reply = {"op": "refused", "id": msg["id"], "error": exc.message}
-                    proc.stdin.write((json.dumps(reply, ensure_ascii=False) + "\n").encode())
-                    await proc.stdin.drain()
-                    raise
-                proc.stdin.write((json.dumps(reply, ensure_ascii=False) + "\n").encode())
-                await proc.stdin.drain()
+                    exc = SandboxError("refused", f"the run passed its cap of {MAX_CALLS} calls")
+                    await write({"op": "refused", "id": msg.get("id"), "error": exc.message})
+                    raise exc
+                in_flight.add(asyncio.ensure_future(one_call(msg)))
             elif op == "done":
                 out = msg.get("output")
                 if not isinstance(out, dict):
@@ -189,6 +222,11 @@ async def run_script(
             else:
                 raise SandboxError("protocol", f"unknown message {op!r} from the sandbox")
     finally:
+        for task in list(locals().get("in_flight") or []):
+            task.cancel()
+        r = locals().get("reader")
+        if r is not None:
+            r.cancel()
         _kill_group(pgid)
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)

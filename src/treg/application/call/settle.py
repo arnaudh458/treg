@@ -736,8 +736,18 @@ async def _platform_settle(
     # A provider-reported zero (an adapter miss, a failed `expect` envelope, an explicit zero
     # charge) is a fact about THIS answer and outranks any frozen basis: a price table says what a
     # success costs, and this was not one.
+    # A `settle: usage` endpoint reads the provider's own charge from the answer (the async worker
+    # hands the terminal document; a synchronous call hands its body the same way, or a per-usage
+    # endpoint would settle at the reserve: live 2026-09-23, Jev settled at the $0.0005 ceiling
+    # instead of the reported $0.0000157).
+    terminal = None
+    if billable and (mk.settlement_basis.get("amount") or {}).get("kind") == "usage" and body:
+        try:
+            terminal = json.loads(body)
+        except ValueError:
+            terminal = None
     actual = ((0 if observed == 0 else settlement_basis.settle(
-        mk.settlement_basis, {"observed_micro": observed})) if billable else None)
+        mk.settlement_basis, {"observed_micro": observed, "terminal": terminal})) if billable else None)
     repeat_percent = get_settings().archive_hit_repeat_price_percent
     if billable and cached_repeat and actual is not None:
         # The repeat price: the team already paid full price for this question once (live or

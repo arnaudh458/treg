@@ -751,6 +751,12 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
         t0 = time.monotonic()
         try:
             response = await execute_child(child, upstream_client)
+        except asyncio.CancelledError:
+            # the script's own `timeout_s` on this call: the child's compensation released its
+            # hold; record the step so the run log shows what was tried, then let the cancel go on
+            ms = int((time.monotonic() - t0) * 1000)
+            trace.append(_entry(step, "timeout", 0, ms, 0, key=None, error=f"no answer in {ms} ms (timeout_s)"))
+            raise
         except CallFailure as exc:
             ms = int((time.monotonic() - t0) * 1000)
             trace.append(_entry(step, "failed", exc.status_code, ms, 0, key=None, error=_short(exc.detail)))

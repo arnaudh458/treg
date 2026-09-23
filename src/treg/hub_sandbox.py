@@ -14,8 +14,11 @@ Protocol, JSON lines, one per message:
   child  → parent  {"op": "log", "text": "..."}
   child  → parent  {"op": "done", "output": {...}} | {"op": "error", "kind": "...", "message": "..."}
 
-`ctx.call` is synchronous underneath (the engine blocks on the answer), so two calls inside one
-`Promise.all` run one after the other in version one; the JSON road is where real parallelism lives.
+`ctx.call` returns a promise and does NOT block the engine: the child sends the call, keeps
+pumping the engine's job queue, and resolves the promise when the parent's reply for that id
+arrives, in whatever order replies come. So five calls in one `Promise.all` are five calls in
+flight at once (the parent runs them four at a time, like the JSON road). A script that awaits
+one call at a time behaves exactly as before.
 """
 
 from __future__ import annotations
@@ -54,13 +57,24 @@ function __csv(text) {
     const o = {}; head.forEach((h, k) => { o[h] = r[k] === undefined ? "" : r[k]; }); return o;
   });
 }
+globalThis.__pending = {};
+// The child calls this with each reply line from the parent; it settles the promise for that id.
+globalThis.__settle = function (packed) {
+  const reply = JSON.parse(packed);
+  const p = globalThis.__pending[reply.id];
+  if (!p) return;
+  delete globalThis.__pending[reply.id];
+  if (reply.op === "refused") { p.reject(new Error(reply.error)); return; }
+  p.resolve({ status: reply.status, headers: reply.headers, json: reply.json, text: reply.text, truncated: !!reply.truncated, timed_out: !!reply.timed_out, cost_usd: reply.cost_usd || 0 });
+};
 globalThis.ctx = {
   inputs: JSON.parse(__inputs_json),
   data: JSON.parse(__data_json),
-  call: async function (target, opts) {
-    const reply = JSON.parse(__bridge_call(JSON.stringify([String(target), opts || {}])));
-    if (reply.op === "refused") { throw new Error(reply.error); }
-    return { status: reply.status, headers: reply.headers, json: reply.json, text: reply.text, truncated: !!reply.truncated, cost_usd: reply.cost_usd || 0 };
+  call: function (target, opts) {
+    return new Promise((resolve, reject) => {
+      const id = __bridge_send(JSON.stringify([String(target), opts || {}]));
+      globalThis.__pending[id] = { resolve, reject };
+    });
   },
   csv: __csv,
   log: function (text) { __bridge_log(String(text)); },
@@ -101,15 +115,17 @@ def main() -> int:
     call_id = 0
     logs = 0
 
-    def bridge_call(packed: str) -> str:
-        nonlocal call_id
+    in_flight = 0
+
+    def bridge_send(packed: str) -> int:
+        """Send one call and return its id at once. The reply comes back through `__settle` from
+        the run loop below, so the engine never blocks on the network."""
+        nonlocal call_id, in_flight
         call_id += 1
+        in_flight += 1
         target, opts = json.loads(packed)
         _emit({"op": "call", "id": call_id, "target": target, "opts": opts})
-        reply = _read()
-        if reply is None:
-            reply = {"op": "refused", "id": call_id, "error": "the runner went away"}
-        return json.dumps(reply, ensure_ascii=False)
+        return call_id
 
     def bridge_log(text: str) -> None:
         nonlocal logs
@@ -117,7 +133,7 @@ def main() -> int:
             logs += 1
             _emit({"op": "log", "text": text[:MAX_LOG_CHARS]})
 
-    ctx.add_callable("__bridge_call", bridge_call)
+    ctx.add_callable("__bridge_send", bridge_send)
     ctx.add_callable("__bridge_log", bridge_log)
     ctx.set("__inputs_json", json.dumps(start.get("inputs", {}), ensure_ascii=False))
     ctx.set("__data_json", json.dumps(start.get("data"), ensure_ascii=False))   # the uploaded CSV's rows, or null
@@ -132,11 +148,23 @@ Promise.resolve().then(() => globalThis.__run(globalThis.ctx))
                                    : (e && e.message !== undefined ? (e.name + ": " + e.message) : String(e))
                                    + (e && e.stack ? "\\n" + e.stack : ""); globalThis.__state = "error"; });
 """)
-        # Drain the job queue until the promise settles. Every ctx.call runs INSIDE a job, so this
-        # loop is also where the bridge round-trips happen.
+        # Drain the job queue until the promise settles. When no job is runnable but calls are in
+        # flight, block on the next reply line from the parent and settle that call's promise;
+        # the settled promise queues new jobs and the loop goes on. Replies may arrive in any order.
         while ctx.eval("globalThis.__state") == "pending":
-            if not ctx.execute_pending_job():
+            if ctx.execute_pending_job():
+                continue
+            if in_flight <= 0:
                 break
+            reply = _read()
+            if reply is None:
+                reply = {"op": "refused", "id": 0, "error": "the runner went away"}
+                for pid in json.loads(ctx.eval("JSON.stringify(Object.keys(globalThis.__pending))")):
+                    ctx.eval(f"globalThis.__settle({json.dumps(json.dumps({**reply, 'id': int(pid)}))})")
+                in_flight = 0
+                continue
+            in_flight -= 1
+            ctx.eval(f"globalThis.__settle({json.dumps(json.dumps(reply, ensure_ascii=False))})")
         state = ctx.eval("globalThis.__state")
     except Exception as exc:  # noqa: BLE001 — every engine failure becomes one honest message
         text = str(exc)

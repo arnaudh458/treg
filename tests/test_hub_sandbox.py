@@ -153,3 +153,65 @@ async def test_ctx_data_carries_the_uploaded_rows():
     assert out == {"n": 2, "first": {"a": "1", "b": "x"}}
     out2, _ = await _run("export default async function run(ctx) { return { d: ctx.data }; }")
     assert out2 == {"d": None}
+
+
+async def test_five_calls_in_one_promise_all_run_at_the_same_time():
+    """The AI visibility tool: five engines at ~30-47 s each cannot fit 120 s one after another.
+    ctx.call no longer blocks the engine, so Promise.all overlaps them (the parent runs four at a
+    time). Each call sleeps 0.3 s: five sequential would take 1.5 s; overlapped, well under 1 s."""
+    import time
+    started: list[float] = []
+
+    async def execute(req):
+        started.append(time.monotonic())
+        await asyncio.sleep(0.3)
+        return {"status": 200, "headers": {}, "json": {"n": len(started)}, "text": ""}
+
+    t0 = time.monotonic()
+    out = await run_script(
+        "export default async function run(ctx) {"
+        "  const rs = await Promise.all([1,2,3,4,5].map(i => ctx.call('hunter.people.email.find', {query: {i}})));"
+        "  return { ok: rs.length, all200: rs.every(r => r.status === 200) };"
+        "}",
+        {}, wall_s=10, execute=execute, log=[])
+    elapsed = time.monotonic() - t0
+    assert out == {"ok": 5, "all200": True}
+    assert len(started) == 5
+    assert elapsed < 1.2, f"five 0.3 s calls took {elapsed:.2f} s: they ran one after another"
+    # four at a time: the first four start together, the fifth waits for a slot
+    assert started[3] - started[0] < 0.2 and started[4] - started[0] >= 0.25
+
+
+async def test_a_refused_call_inside_promise_all_still_stops_the_run():
+    async def execute(req):
+        if req.opts.get("query", {}).get("i") == 2:
+            raise SandboxError("refused", "no")
+        await asyncio.sleep(0.05)
+        return {"status": 200, "headers": {}, "json": None, "text": ""}
+
+    with pytest.raises(SandboxError) as e:
+        await run_script(
+            "export default async function run(ctx) {"
+            "  await Promise.all([1,2,3].map(i => ctx.call('hunter.people.email.find', {query: {i}})));"
+            "  return { ok: true };"
+            "}",
+            {}, wall_s=10, execute=execute, log=[])
+    assert e.value.kind == "refused"
+
+
+async def test_a_call_with_its_own_timeout_answers_timed_out_instead_of_ending_the_run():
+    """`timeout_s` on ctx.call: the slow engine is "did not answer", the fast one still counts."""
+    async def execute(req):
+        if req.opts.get("query", {}).get("slow"):
+            await asyncio.sleep(5)
+        return {"status": 200, "headers": {}, "json": {"ok": 1}, "text": ""}
+
+    out = await run_script(
+        "export default async function run(ctx) {"
+        "  const [a, b] = await Promise.all(["
+        "    ctx.call('hunter.people.email.find', {query: {slow: 1}, timeout_s: 0.3}),"
+        "    ctx.call('hunter.people.email.find', {query: {slow: 0}, timeout_s: 0.3})]);"
+        "  return { a_timed_out: a.timed_out, a_status: a.status, b_status: b.status, b_timed_out: b.timed_out };"
+        "}",
+        {}, wall_s=10, execute=execute, log=[])
+    assert out == {"a_timed_out": True, "a_status": 0, "b_status": 200, "b_timed_out": False}

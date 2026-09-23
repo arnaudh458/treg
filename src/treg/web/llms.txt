@@ -416,7 +416,9 @@ and `200` when it is on.
   headers, json, text, cost_usd}`, `ctx.csv(text)`,
   `ctx.data` (the rows of the `data.csv` uploaded with the tool, ≤ 50 MB, read-only) and `ctx.log`;
   no network, no files, no `require`. `target` must be in the manifest's `uses`: a catalog id, one
-  of the team's own tools as `<tool>/<path>`, or a full URL under that tool's base URL. Your own
+  of the team's own tools as `<tool>/<path>`, or a full URL under that tool's base URL. Calls in
+  one `Promise.all` run at the same time, four at once; `timeout_s` in the options is that one
+  call's own limit (past it the result is `{status: 0, timed_out: true}`, the run goes on). Your own
   server or a public Google Sheet is a tool too: `treg tool add my-api --base-url https://…`
   (secret optional), then name it. Caps: 120 s, 20 calls, 64 MB, four runs at a time.
 - **Never paste a credential into a script.** Register it first (`treg secret add`, `treg tool

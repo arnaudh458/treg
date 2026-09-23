@@ -164,8 +164,15 @@ only when it starts with the base URL of an own tool named in `uses` (its query 
 call's) and refused for any other host. "My script needs my own server" is answered by that
 door: the server is an own tool (`treg tool add my-api --base-url https://api.mine.com`, secret
 optional; a public Google Sheet needs none); treg makes the request; the sandbox never opens a
-socket. Known limit: `ctx.call` is synchronous underneath the engine, so two calls in one
-`Promise.all` run one after the other; the JSON road has the real parallelism. **A security
+socket. `ctx.call` returns a promise and does not block the engine: the child keeps pumping the
+job queue and settles each promise when the parent's reply for that id arrives, so five calls in
+one `Promise.all` are five in flight, run by the parent as tasks four at a time (`MAX_PARALLEL`,
+the JSON road's width) and answered in whatever order they finish. A script that awaits one call
+at a time behaves as before. `timeout_s` in ctx.call's options is the script's own limit for that
+one call: passing it answers `{status: 0, timed_out: true}` instead of ending the run, the cancelled
+child releases its hold, and the trace records the step as `timeout`. Added 2026-09-23 for the AI
+visibility tool: five answer engines at 30-47 s each could not fit 120 s one after another, and one
+engine that never answers must not cost the other four. **A security
 review of the sandbox is scheduled as its own pass before release** (the owner's note).
 
 ## The maker's road (`routers/hub.py`, `application/hub/__init__.py`)

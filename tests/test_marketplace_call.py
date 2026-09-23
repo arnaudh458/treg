@@ -3824,3 +3824,44 @@ async def test_prospeo_mobile_uses_fixed_ten_credit_platform_price_and_byok_is_u
     assert seen == ["OWN-PROSPEO"]
     assert "x-treg-cost-micro" not in result.headers
     assert await _balance(clients) == before
+
+
+# ---------------------------------------------------------------------------------------------
+# A synchronous `settle: usage` endpoint (Jev through OpenRouter, added for the AI visibility tool)
+
+@pytest.fixture
+def openrouter_platform_on(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_OPENROUTER", "PLATFORM-OPENROUTER")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "openrouter")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+async def test_a_sync_usage_settled_call_charges_the_providers_reported_cost(
+    clients, monkeypatch, openrouter_platform_on,
+):
+    """Live 2026-09-23: Jev settled at its $0.0005 reserve because the `usage` basis only read the
+    async worker's terminal document. A synchronous call now hands its own body: the reply's
+    `usage.cost` (here $0.00002 = 20 µ$) is what the caller pays, and the rest of the hold is
+    given back. The `..` path lands on /api/alpha/decisions, outside the provider's /api/v1 base."""
+    reply = {"model": "typesafe/jev-1.13-20260917",
+             "answers": {"q": {"type": "noul", "noul": 0.95}},
+             "usage": {"cost": 0.00002, "prompt_tokens": 476}}
+
+    def serve(request):
+        assert request.url.path == "/api/alpha/decisions"
+        assert request.headers["authorization"] == "Bearer PLATFORM-OPENROUTER"
+        return _dropleads_response(200, reply)     # a fresh stream per call, like every mock here
+
+    before = await _balance(clients)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as upstream:
+        monkeypatch.setattr(A.app.state, "http", upstream)
+        r = await clients.post("/call/openrouter.ai-judge.decide", json={
+            "model": "typesafe/jev-1.13", "state": "# Decision context\n\n<text>x</text>",
+            "questions": {"q": {"type": "noul", "instructions": "is it x?",
+                                "criteria": {"true": "x", "false": "not x"}}}})
+    assert r.status_code == 200, r.text
+    assert r.json() == reply
+    assert r.headers["x-treg-cost-micro"] == "20"
+    assert before - await _balance(clients) == 20
