@@ -29,7 +29,6 @@ sources:
   - tests/test_api_keys.py
   - tests/test_oauth_refresh.py
   - tests/test_financialdatasets.py
-  - tests/test_fetchinio.py
   - tests/test_key_providers.py
   - src/treg/config.py
 related:

@@ -4,7 +4,6 @@ status: shipped
 sources:
   - src/treg/catalog/fetchinio.yaml
   - src/treg/web/logos/fetchinio.svg
-  - tests/test_fetchinio.py
   - src/treg/catalog/examples/fetchinio.linkedin.user.profile.json
   - src/treg/catalog/examples/fetchinio.linkedin.company.profile.json
   - src/treg/catalog/examples/fetchinio.linkedin.user.posts.json

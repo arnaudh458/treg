@@ -33,7 +33,6 @@ sources:
   - scripts/provider_balances.py
   - src/treg/alembic/versions/0005_capacity_policy_snapshot.py
   - tests/test_capacity_know.py
-  - tests/test_fetchinio.py
   - tests/test_capacity_collectors.py
   - tests/test_financialdatasets.py
   - tests/test_tinyfish.py
