@@ -125,6 +125,24 @@ async def _tavily(c, key):
             "note": "Usage response did not contain a finite key or account limit"}
 
 
+async def _serper(c, key):
+    d = await _get(c, "https://google.serper.dev/account",
+                   headers={"X-API-KEY": key})
+    raw = d.get("balance") if isinstance(d, dict) else None
+    try:
+        balance = Decimal(str(raw)) if not isinstance(raw, bool) and raw is not None else None
+    except (InvalidOperation, ValueError):
+        balance = None
+    if balance is None or not balance.is_finite() or balance < 0:
+        raise ValueError("Serper account returned an invalid balance")
+    rate = d.get("rateLimit")
+    rate_note = (f"account rate limit {rate:g} queries/s"
+                 if isinstance(rate, (int, float)) and not isinstance(rate, bool)
+                 and math.isfinite(float(rate)) and rate >= 0
+                 else "account rate limit unavailable")
+    return {"value": float(balance), "unit": "credits", "note": rate_note}
+
+
 async def _olostep(c, key):
     # Free authenticated account read. `credits` is the authoritative sum of unexpired lots;
     # endpoint responses report their own `credits_consumed`, which settlement handles separately.
@@ -762,6 +780,7 @@ BALANCE_ROUTES = {
     "tinyfish": _tinyfish,
     "fishaudio": _fishaudio,
     "tavily": _tavily,
+    "serper": _serper,
     "olostep": _olostep,
     "scrapegraphai": _scrapegraphai,
     "scrapecreators": _scrapecreators,

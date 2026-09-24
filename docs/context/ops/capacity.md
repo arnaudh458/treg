@@ -91,6 +91,14 @@ funding. Shared-key smoothing uses the configured 500 requests per minute;
 live responses supplied no usable rate-limit headers. The credits route remains internal capacity
 evidence rather than a catalog tool, and no funding automation or exhaustion signature is inferred.
 
+Serper's internal collector calls `GET /account` with the platform `X-API-KEY`. It accepts only a
+finite nonnegative `balance` and records Serper's numeric `rateLimit` as an informational note. The
+policy is `credits / auto_recharge / api`: the API balance is exact, and vendor auto recharge was
+manually enabled and verified in the dashboard. The live shared account reports 50 requests per
+second, so shared-key smoothing uses 50 requests per second. The account route remains internal
+capacity evidence rather than a catalog tool. The funded account was not deliberately exhausted,
+so no provider-specific empty-balance signature or overflow route is claimed.
+
 TrestleIQ publishes no free balance or usage API. Capacity reports the wallet as Developer
 Portal-only and does not spend a validation query to read it. The policy records cash with vendor
 auto recharge, manually verified as enabled in the portal, and a documented 10 requests/second

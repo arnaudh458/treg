@@ -264,6 +264,15 @@ def tavily_platform_on(monkeypatch):
 
 
 @pytest.fixture
+def serper_platform_on(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_SERPER", "PLATFORM-SERPER")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "serper")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
 def olostep_platform_on(monkeypatch):
     monkeypatch.setenv("TREG_PLATFORM_KEY_OLOSTEP", "PLATFORM-OLOSTEP")
     monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "olostep")
@@ -988,6 +997,54 @@ def test_openmart_settlement_rejects_undocumented_response_shapes():
                  cost_type="per_result", unit_micro=29_800)
     assert call_settle._observed_cost_micro(search, b'{"data":{}}') is None
     assert call_settle._observed_cost_micro(lookup, b'[]') is None
+
+
+@pytest.mark.parametrize(("reported", "expected"), [
+    (0, 0), (1, 1_000), ("2", 2_000), (3, 3_000), (6, 6_000), (10, 10_000),
+])
+def test_serper_settles_exact_reported_credits(reported, expected):
+    mk = _mk("serper", endpoint_id="serper.web.extract",
+             cost_type="per_call", reported_charge_unit_micro=1_000)
+    assert call_settle._observed_cost_micro(
+        mk, json.dumps({"credits": reported, "text": "served"}).encode()
+    ) == expected
+
+
+@pytest.mark.parametrize("reported", [None, True, -1, "bad", "NaN", "Infinity"])
+def test_serper_rejects_malformed_reported_credits(reported):
+    mk = _mk("serper", endpoint_id="serper.web.search",
+             cost_type="per_call", reported_charge_unit_micro=1_000)
+    assert call_settle._observed_cost_micro(
+        mk, json.dumps({"credits": reported, "organic": []}).encode()
+    ) is None
+
+
+async def test_serper_scrape_reserves_ceiling_and_settles_reported_credits(
+    clients, monkeypatch, serper_platform_on,
+):
+    def serve(request):
+        assert request.method == "POST" and request.url == "https://scrape.serper.dev/"
+        assert request.headers["x-api-key"] == "PLATFORM-SERPER"
+        assert json.loads(request.content) == {
+            "url": "https://example.com", "includeMarkdown": True,
+        }
+        return _dropleads_response(200, {
+            "text": "Example Domain", "markdown": "# Example Domain", "credits": 2,
+        })
+
+    before = await _balance(clients)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as upstream:
+        monkeypatch.setattr(A.app.state, "http", upstream)
+        response = await clients.post("/call/serper.web.extract", json={
+            "url": "https://example.com", "includeMarkdown": True,
+        })
+    assert response.status_code == 200, response.text
+    assert response.headers["x-treg-cost-micro"] == "2000"
+    assert before - await _balance(clients) == 2_000
+    telemetry = await _telemetry(clients)
+    assert telemetry["cost_estimated_micro"] == 10_000
+    assert telemetry["cost_observed_micro"] == 2_000
+    assert telemetry["cost_charged_micro"] == 2_000
 
 
 @pytest.mark.parametrize(("endpoint", "body", "expected"), [

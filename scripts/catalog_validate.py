@@ -702,8 +702,11 @@ def check_cost(cost: dict, where: str, errors: list[str], warnings: list[str],
         if (not isinstance(reported, dict) or set(reported) != {"path", "unit"}
                 or not isinstance(reported.get("path"), str)
                 or not JSON_PATH.fullmatch(reported["path"])
-                or reported.get("unit") != "usd"):
-            fail(errors, where, "cost.reported_charge requires a JSON path and unit: usd")
+                or reported.get("unit") not in {"usd", "credit"}):
+            fail(errors, where, "cost.reported_charge requires a JSON path and unit: usd or credit")
+        if reported.get("unit") == "credit" and not _finite_number(_credit_rate(provider)):
+            fail(errors, where, "cost.reported_charge unit credit needs a numeric "
+                                "fx.yaml credit_rates_usd entry")
         if "settle" in cost or cost.get("type") == "free":
             fail(errors, where, "cost.reported_charge requires a paid price without cost.settle")
     if "display" in cost:

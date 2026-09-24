@@ -157,6 +157,20 @@ def test_tavily_routes_synchronous_web_tools_and_keeps_crawl_direct():
     assert cat.platform_eligible(cat.by_id["tavily.web.crawl"])
 
 
+def test_serper_routes_search_and_single_page_extract_only():
+    cat = catalog_store.load()
+    routed = {
+        "serper.web.search": "treg.web.search",
+        "serper.web.extract": "treg.web.extract",
+    }
+    for child, parent in routed.items():
+        assert cat.adapters[child].verified
+        assert child in cat.by_id[parent]["routed_children"]
+        assert cat.platform_eligible(cat.by_id[child])
+    direct = set(ep["id"] for ep in cat.for_provider("serper")) - set(routed)
+    assert not direct & set(cat.adapters)
+
+
 async def test_tavily_routed_empty_search_is_a_paid_miss_then_falls_through(
     clients, monkeypatch,
 ):

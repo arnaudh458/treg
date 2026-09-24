@@ -50,6 +50,12 @@ internal `GET /api/credits` probe rejects invalid credentials and validates team
 platform credentials while also supplying capacity data. `TREG_PLATFORM_KEY_SCRAPEGRAPHAI` supplies
 the server-held fallback; the existing own-key-first ladder keeps a team's credential unmetered.
 
+Serper uses a pasted raw `X-API-KEY` header at `https://google.serper.dev`. Its free internal
+`GET /account` probe validates team-owned and optional platform credentials while also supplying
+balance and rate-limit evidence. `CatalogTarget` approves `https://scrape.serper.dev` for the same
+credential without broadening the primary host. `TREG_PLATFORM_KEY_SERPER` supplies the server-held
+fallback; the existing own-key-first ladder keeps a team's credential unmetered.
+
 `ADYNTEL` is the first pasted-key provider whose two credentials ride in the JSON request body.
 The primary `api_key` and second `email` are ordinary declarative bindings with `location: json`;
 the relay contains no Adyntel branch. Tier 4 reads `TREG_PLATFORM_KEY_ADYNTEL` and

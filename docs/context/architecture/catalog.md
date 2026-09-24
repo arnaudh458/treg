@@ -912,8 +912,9 @@ and state the break-even volume, and `fee_usd_month` must be present as data (th
 and edited by hand. The full ladder: docs/SHARED-PLAN-PRICING-PLAN.md; the billing side (429 never
 billable, the recovery report): architecture/money.md.
 
-For synchronous providers that disclose the exact USD charge in the response, a paid cost may
-declare `reported_charge: {path: ..., unit: usd}`. The catalog estimate still reserves a safe
+For synchronous providers that disclose the exact charge in the response, a paid cost may declare
+`reported_charge: {path: ..., unit: usd}` or use `unit: credit` when the provider has an `fx.yaml`
+credit rate. The catalog estimate still reserves a safe
 ceiling. A finite nonnegative response value settles the call at that amount; missing, invalid, or
 non-finite evidence falls back to the normal estimate/miss rules. `reported_charge` is generic
 catalog metadata, not a provider-specific billing branch, and cannot be combined with `cost.settle`.
