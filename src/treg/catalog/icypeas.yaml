@@ -253,6 +253,10 @@ endpoints:
       checked: '2026-08-20'
       confidence: documented
       note: "10 credits per FOUND profile; a miss is free"
+    miss:
+      status: 200
+      when: "status == 'NOT_FOUND'"
+      means: "no profile URL for this email — a normal outcome (and free), not an API failure"
     verified: '2026-08-20'
     example_response: examples/icypeas.people.identity.resolve.json
     docs_url: https://api-doc.icypeas.com/reverse-email-lookup
@@ -420,6 +424,10 @@ endpoints:
       checked: '2026-08-20'
       confidence: documented
       note: "1 credit per found URL; a miss is free"
+    miss:
+      status: 200
+      when: "status == 'NOT_FOUND'"
+      means: "no profile URL for this person — a normal outcome (and free), not an API failure"
     verified: '2026-08-20'
     example_response: examples/icypeas.people.profile.url.json
     docs_url: https://api-doc.icypeas.com/scrape/user-profile-url-search
@@ -450,6 +458,10 @@ endpoints:
       checked: '2026-08-20'
       confidence: documented
       note: "1 credit per found URL; a miss is free"
+    miss:
+      status: 200
+      when: "status == 'NOT_FOUND'"
+      means: "no profile URL for this company — a normal outcome (and free), not an API failure"
     verified: '2026-08-20'
     example_response: examples/icypeas.companies.profile.url.json
     docs_url: https://api-doc.icypeas.com/scrape/company-profile-url-search
@@ -511,6 +523,10 @@ endpoints:
       checked: '2026-08-20'
       confidence: documented
       note: "1.5 credits per found profile; a URL that resolves to nothing is free"
+    miss:
+      status: 200
+      when: "status == 'NOT_FOUND'"
+      means: "no profile found at this URL — a normal outcome (and free), not an API failure"
     verified: '2026-08-20'
     example_response: examples/icypeas.people.enrich.json
     docs_url: https://api-doc.icypeas.com/scrape/scrape-profile-scraper
@@ -541,6 +557,10 @@ endpoints:
       checked: '2026-08-20'
       confidence: documented
       note: "0.5 credit per found company; a miss is free"
+    miss:
+      status: 200
+      when: "status == 'NOT_FOUND'"
+      means: "no company found at this URL — a normal outcome (and free), not an API failure"
     verified: '2026-08-20'
     example_response: examples/icypeas.companies.enrich.json
     docs_url: https://api-doc.icypeas.com/scrape/scrape-company-scraper

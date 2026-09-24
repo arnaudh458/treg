@@ -180,6 +180,59 @@ def _companyenrich_record_count(endpoint_id: str, doc: object) -> int | None:
     return max(len(items), 1)
 
 
+def _icypeas_bulk_found_count(endpoint_id: str, doc: object) -> int | None:
+    """Count only FOUND items in Icypeas bulk responses (profile URL, identity resolve, scrape).
+
+    Icypeas bulk endpoints bill per found item: `status: NOT_FOUND` items are free. The reserve
+    uses the request row count, but settlement should count only the FOUND items in `data[]`.
+    Found live 2026-09-24: ~694 of 732 NOT_FOUND responses billed at the full estimate because
+    the settlement code had no counter for icypeas bulk responses.
+    """
+    if endpoint_id not in (
+        "icypeas.profile.url.bulk",
+        "icypeas.people.identity.resolve.bulk",
+        "icypeas.scrape.bulk",
+    ):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    data = doc.get("data")
+    if not isinstance(data, list):
+        return None
+    return sum(1 for item in data if isinstance(item, dict) and item.get("status") == "FOUND")
+
+
+def _serpstat_result_count(doc: object) -> int | None:
+    """Count result rows for Serpstat JSON-RPC responses, returning 0 for error envelopes.
+
+    Serpstat's JSON-RPC API answers HTTP 200 for both success and failure:
+      - Error: {"id": "1", "error": {...}} — bad token, exhausted limit, malformed params,
+        or "Data not found" — should be FREE, not billed at the reserve.
+      - Success: {"id": "1", "result": {"data": [...], "summary_info": {...}}} — bill per row,
+        with a documented 1-credit minimum even on empty results (enforced since 2025-06-15).
+    The catalog documents this at serpstat.yaml line 29-34 and line 43-45.
+
+    Found live 2026-09-24: "Data not found" error envelopes charged $0.01 (the full reserve)
+    because no handler detected the error field.
+    """
+    if not isinstance(doc, dict):
+        return None
+    if "error" in doc:
+        return 0
+    result = doc.get("result")
+    if not isinstance(result, dict):
+        return None
+    data = result.get("data")
+    if isinstance(data, dict):
+        top = data.get("top")
+        if isinstance(top, list):
+            return max(len(top), 1)
+        return 1
+    if isinstance(data, list):
+        return max(len(data), 1)
+    return 1
+
+
 def _tavily_requested_result_limit(mk: MarketplaceCall) -> int:
     """The request-bound maximum frozen before relay; malformed evidence keeps the 20-page cap."""
     request = mk.request_data.get("body") if isinstance(mk.request_data, dict) else None
@@ -410,6 +463,19 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
     if provider == "companyenrich" and mk.cost_type == "per_result" and mk.unit_micro > 0:
         count = _companyenrich_record_count(mk.endpoint_id, doc)
         return None if count is None else count * mk.unit_micro
+    if provider == "icypeas" and mk.cost_type == "per_result" and mk.unit_micro > 0:
+        count = _icypeas_bulk_found_count(mk.endpoint_id, doc)
+        return None if count is None else count * mk.unit_micro
+    if provider == "serpstat" and mk.cost_type == "per_result" and mk.unit_micro > 0:
+        count = _serpstat_result_count(doc)
+        return None if count is None else count * mk.unit_micro
+    if provider == "thecompaniesapi":
+        # DOCUMENTED: `simplified=true` makes any endpoint free — reduced record, zero credits.
+        # Found live 2026-09-24: victor@usetandem.ai billed $0.095 on 0 results with simplified=true.
+        query_params = (mk.request_data.get("queryParams") or {}) if isinstance(mk.request_data, dict) else {}
+        if query_params.get("simplified") is True or str(query_params.get("simplified")).lower() == "true":
+            return 0
+        # 404 miss is already handled by adapter miss declaration
     # Early adapter-miss check for non-dict responses (lists like `[]` from findymail.search.employees).
     # The generic miss check at the end only handles dicts; a per_success endpoint returning `[]` would
     # settle at the estimate without this branch — found live 2026-09-24: findymail billed $2.79 across

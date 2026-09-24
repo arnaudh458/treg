@@ -1354,6 +1354,72 @@ def test_tikhub_envelope_no_charge_settles_at_zero():
     assert call_settle._observed_cost_micro(t, b"not json") is None
 
 
+def test_serpstat_error_envelope_settles_at_zero():
+    """Serpstat's JSON-RPC envelope: `error` means an API failure (free), `result` means billable.
+    HTTP 200 is returned for both, so the only signal is the envelope shape. Empty results still
+    bill the documented 1-credit minimum — that is Serpstat's policy, not a bug."""
+    # 1 credit = $0.0005 = 500 micro-USD (fx.yaml)
+    credit = 500
+    s = _mk("serpstat", cost_type="per_result", unit_micro=credit)
+    # Error envelopes are FREE — "Data not found", bad params, exhausted limits
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","error":{"code":-32600,"message":"Data not found"}}') == 0
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","error":{"code":-32601,"message":"Method not found"}}') == 0
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","error":{}}') == 0, "any error field = free"
+    # Valid response with data rows: 1 credit per row
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","result":{"data":[{},{}],"summary_info":{}}}') == 2 * credit
+    # Valid response with zero rows: 1-credit minimum (Serpstat's documented policy)
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","result":{"data":[],"summary_info":{}}}') == 1 * credit
+    # getKeywordTop nests rows at result.data.top[]
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","result":{"data":{"top":[{},{},{}]}}}') == 3 * credit
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","result":{"data":{"top":[]}}}') == 1 * credit
+    # Single-object results (like backlinks summary) cost 1
+    assert call_settle._observed_cost_micro(s, b'{"id":"1","result":{"data":{"links":100}}}') == 1 * credit
+    # Non-dict body: settle at estimate (can't determine shape)
+    assert call_settle._observed_cost_micro(s, b"not json") is None
+    assert call_settle._observed_cost_micro(s, b"[1,2,3]") is None
+
+
+def test_icypeas_bulk_settles_on_found_items_only():
+    """Icypeas bulk endpoints bill per FOUND item: NOT_FOUND items are free. A 10-item batch where
+    7 returned NOT_FOUND should settle at 3 credits, not 10 — the bug found live 2026-09-24."""
+    credit = 3_800  # 1 credit = $0.0038 (fx.yaml)
+    icy = _mk("icypeas", endpoint_id="icypeas.profile.url.bulk", cost_type="per_result", unit_micro=credit)
+    # All found
+    all_found = b'{"data":[{"status":"FOUND","profileUrl":"https://linkedin.com/in/a"},{"status":"FOUND","profileUrl":"https://linkedin.com/in/b"}]}'
+    assert call_settle._observed_cost_micro(icy, all_found) == 2 * credit
+    # Mixed: 2 found, 3 not found
+    mixed = b'{"data":[{"status":"FOUND"},{"status":"NOT_FOUND"},{"status":"FOUND"},{"status":"NOT_FOUND"},{"status":"NOT_FOUND"}]}'
+    assert call_settle._observed_cost_micro(icy, mixed) == 2 * credit
+    # All NOT_FOUND: should be free
+    all_miss = b'{"data":[{"status":"NOT_FOUND"},{"status":"NOT_FOUND"},{"status":"NOT_FOUND"}]}'
+    assert call_settle._observed_cost_micro(icy, all_miss) == 0
+    # Empty data array
+    assert call_settle._observed_cost_micro(icy, b'{"data":[]}') == 0
+    # Non-bulk endpoint: handler returns None (other icypeas endpoints use per_success + miss rules)
+    single = _mk("icypeas", endpoint_id="icypeas.people.profile.url", cost_type="per_success", unit_micro=credit)
+    assert call_settle._observed_cost_micro(single, b'{"status":"NOT_FOUND"}') is None
+
+
+def test_thecompaniesapi_simplified_settles_at_zero():
+    """thecompaniesapi's `simplified=true` makes any endpoint FREE — a reduced preview record
+    at zero credits. Found live 2026-09-24: victor@usetandem.ai billed $0.095 with simplified=true."""
+    tca = _mk("thecompaniesapi", endpoint_id="thecompaniesapi.companies.search",
+              cost_type="per_result", unit_micro=9_500,
+              request_data={"queryParams": {"simplified": True}})
+    assert call_settle._observed_cost_micro(tca, b'{"companies":[]}') == 0
+    assert call_settle._observed_cost_micro(tca, b'{"companies":[{},{}]}') == 0, "even with data, simplified is free"
+    # String "true" also works (common in query params)
+    tca_str = _mk("thecompaniesapi", endpoint_id="thecompaniesapi.companies.search",
+                  cost_type="per_result", unit_micro=9_500,
+                  request_data={"queryParams": {"simplified": "true"}})
+    assert call_settle._observed_cost_micro(tca_str, b'{"companies":[{},{}]}') == 0
+    # Non-simplified: handler returns None (uses normal per_result logic)
+    tca_paid = _mk("thecompaniesapi", endpoint_id="thecompaniesapi.companies.search",
+                   cost_type="per_result", unit_micro=9_500,
+                   request_data={"queryParams": {"simplified": False}})
+    assert call_settle._observed_cost_micro(tca_paid, b'{"companies":[{},{}]}') is None
+
+
 async def test_hunter_zero_result_search_costs_nothing(clients: AsyncClient, platform_on, monkeypatch):
     """End to end, the bug this fixes: four domain searches that returned no emails each settled at
     $0.0490 — the 20-row default page assumption × the per-row price — for results nobody received."""
