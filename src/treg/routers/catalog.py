@@ -426,14 +426,6 @@ async def catalog_example(endpoint_id: str) -> Response:
     return Response(content=path.read_bytes(), media_type="application/json")
 
 
-def _hub_worst_usd(manifest: dict, price_micro: int) -> float:
-    """The most a run can cost for the seller's price: the flat price, or the declared max."""
-    p = manifest.get("pricing") or {"mode": "flat", "price_usd": price_micro / 1_000_000}
-    if p.get("mode") in ("per_unit", "cost_plus"):
-        return float(p["max_price_usd"])
-    return float(p.get("price_usd", price_micro / 1_000_000))
-
-
 async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
     """The public contract of one hub tool, in the shape `treg catalog get` and `catalog_get`
     already print: `endpoint` (with `kind: "hub"`), `provider` (the maker's team). Hides the
@@ -455,6 +447,7 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
     example = {k: v.get("example", v.get("default")) for k, v in inputs.items()
                if "example" in v or "default" in v}
     example = {k: v for k, v in example.items() if v not in ("", None, 0)}
+    rng = (await hub_app.price_ranges(db, {row.tool_id: m})).get(row.tool_id)
     return {
         "endpoint": {
             "id": row.tool_id, "kind": "hub", "hub": True, "version": row.version,
@@ -464,9 +457,10 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
             "inputs": inputs, "output": m.get("output", {}), "writes": row.writes,
             "recipe": "script" if row.kind == "script" else "steps",
             "limits": m.get("limits", {}),
-            "cost": {"type": "per_success", "usd": _hub_worst_usd(m, row.price_micro), "currency": "USD",
-                     "unit": "run", "note": "the maker's price per successful run (the most a variable price can reach); metered steps are billed on top, one trace line each"},
-            "price_line": "seller " + hub_price_label(m) + " + steps",
+            "cost": {"type": "per_success", "usd": hub_app.worst_usd(m, row.price_micro, rng), "currency": "USD",
+                     "unit": "run", "note": "the most a successful run has cost recently, provider fees and the maker's price together (`price_range` is the observed low–high); the maker's own price is `price_line`"},
+            "price_line": "seller " + hub_price_label(m) + " + provider fees",
+            **hub_app.with_range(m, rng),
             "made_of": len(m.get("uses", [])),
             "status": row.status,
             "health": health.state, "fails_in_a_row": health.fails_in_a_row,

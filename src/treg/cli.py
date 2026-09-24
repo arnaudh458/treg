@@ -5193,7 +5193,7 @@ _HUB_STEPS_SKELETON = {
     "steps": [{"name": "fetch", "call": "my-api/v1/items",
                "input": {"q": "$input.query", "limit": "$input.limit"}}],
     "output": {"items": "$fetch"},
-    "pricing": {"mode": "flat", "price_usd": 0},
+    "pricing": {"mode": "per_call", "price_usd": 0},
 }
 _HUB_SCRIPT_SKELETON = {
     "name": None,
@@ -5203,7 +5203,7 @@ _HUB_SCRIPT_SKELETON = {
     "uses": ["my-api"],
     "script": "run.js",
     "output": {"fields": ["items", "count"]},
-    "pricing": {"mode": "flat", "price_usd": 0},
+    "pricing": {"mode": "per_call", "price_usd": 0},
 }
 _HUB_RUN_JS = """// The whole surface a script gets:
 //   ctx.inputs                                  the caller's inputs, checked against recipe.json
@@ -5456,7 +5456,7 @@ def cmd_hub_price(args, cfg) -> None:
     d = r.json()
     _section("Price changed")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
-    _kv("price", f"${d['price_usd']:.6g} per successful run  (${d['price_usd'] * 1000:,.2f} per 1,000); applies to later runs")
+    _kv("price", f"${d['price_usd']:.6g} per call  (${d['price_usd'] * 1000:,.2f} per 1,000 runs); applies to later runs")
 
 
 def cmd_hub_ls(args, cfg) -> None:
@@ -5473,7 +5473,7 @@ def cmd_hub_ls(args, cfg) -> None:
     print(f"  {_M}{'TOOL':<44}{'VER':>3}  {'STATUS':<8}{'KIND':<7}{'PRICE':<28}USES{_R}")
     for t in rows:
         colour = _G if t["status"] == "live" else _AM if t["status"] == "failed" else _M
-        price = t.get("price_label") or (f"${t['price_usd']:.6g}/run" if t.get("price_usd") else "free")
+        price = t.get("price_range") or t.get("price_label") or (f"${t['price_usd']:.6g}/run" if t.get("price_usd") else "free")
         print(f"  {t['tool_id']:<44}{t['version']:>3}  {colour}{t['status']:<8}{_R}{t['kind']:<7}{price:<28}{', '.join(t['uses'])[:40]}")
 
 

@@ -591,6 +591,57 @@ async def test_the_uploaded_csv_recipe_serves_its_own_data_with_no_call(
 
 
 
+async def test_the_engineering_team_size_recipe_reads_the_crustdata_role_headcount(
+    matrix_clients: AsyncClient, fake_provider: FakeProvider, platform_on, hub_on, monkeypatch,
+):
+    """docs/hub-recipes/engineering-team-size: the ladder's free identity step, then CrustData's
+    Engineering role bucket; PDL is not reached when CrustData answers. The price is per_call."""
+    import json as _json
+    from pathlib import Path
+    folder = Path(__file__).resolve().parents[2] / "docs" / "hub-recipes" / "engineering-team-size"
+    # the recipe's two providers are not in platform_on's roster: give them treg keys the same way
+    import os
+    monkeypatch.setenv("TREG_PLATFORM_KEY_PDL", "PLATFORM-PDL-KEY")
+    monkeypatch.setenv("TREG_PLATFORM_KEY_CRUSTDATA", "PLATFORM-CRUSTDATA-KEY")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", os.environ["TREG_PLATFORM_PROVIDERS"] + ",pdl,crustdata")
+    get_settings.cache_clear()
+
+    def body(request, headers):
+        if request.method == "POST":                                    # crustdata.companies.enrich
+            return _json.dumps([{"matched_on": "x", "matches": [{"confidence_score": 1.0, "company_data": {
+                "headcount": {"total": 200, "by_role_absolute": {"Engineering": 80, "Sales": 50},
+                              "by_role_growth_yoy_pct": {"Engineering": 12.5}}}}]}]).encode()
+        if request.url.path.endswith("/company/clean"):                 # pdl.x.company-clean, free
+            return _json.dumps({"status": 200, "name": "acme", "linkedin_url": "linkedin.com/company/acme"}).encode()
+        return _json.dumps({"status": 200, "employee_count": 200}).encode()   # pdl.companies.enrich, no class data
+    monkeypatch.setattr(FakeProvider, "_response_body", staticmethod(body))
+    from treg.domain import money as ledger
+    from treg.infra.db import session_maker
+    org = (await matrix_clients.get("/orgs")).json()[0]["org_id"]
+    async with session_maker() as db:                                   # CrustData reserves ~$1.20 a call
+        await ledger.grant(db, org, amount_micro=10_000_000, kind="promotional", once=False)
+        await db.commit()
+    pub = await matrix_clients.post("/hub/tools", json={
+        "manifest": _json.loads((folder / "recipe.json").read_text()), "script": (folder / "run.js").read_text(),
+        "check": _json.loads((folder / "check.json").read_text()), "readme": (folder / "README.md").read_text()})
+    assert pub.status_code == 201 and pub.json()["status"] == "live", pub.text
+    ceiling = {"X-Treg-Run-Max-Cost": "3"}                             # CrustData alone estimates over the $1 default
+    r = await matrix_clients.post(f"/call/{pub.json()['tool_id']}", json={"domain": "https://www.Acme.com/about"}, headers=ceiling)
+    assert r.status_code == 200, r.text
+    out = r.json()["output"]
+    assert out["domain"] == "acme.com" and out["estimated_engineering_count"] == 80 and out["estimated_range"] == "51-100"
+    assert out["confidence"] == "medium" and out["selected_method"] == "crust_company_engineering_headcount"
+    assert out["engineering_growth_yoy_pct"] == 12.5 and out["review_reasons"] == []
+    assert r.json()["usage"]["steps"] == 2                              # clean + crustdata; PDL never reached
+    hit = fake_provider.hits[-1]
+    assert hit.method == "POST" and _json.loads(hit.body)["professional_network_profile_urls"] == ["https://www.linkedin.com/company/acme"]
+    # validate runs every tier and reports the disagreement column
+    r = await matrix_clients.post(f"/call/{pub.json()['tool_id']}", json={"domain": "acme.com", "method": "validate"}, headers=ceiling)
+    assert r.status_code == 200 and r.json()["usage"]["steps"] == 3, r.text
+    assert [a["status"] for a in r.json()["output"]["provider_attempts"]] == ["answered", "no_answer"]
+
+
+
 # ---------------------------------------------------------------------------------------------
 # 8.2: the security pass. Each test is a finding that was open before it.
 

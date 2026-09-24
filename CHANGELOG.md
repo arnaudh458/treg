@@ -21,11 +21,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   sees the maker's keys, and `uses` in the manifest names every host a tool may reach. A script
   runs in a separate process with no network of its own; `ctx.call` is its only road out.
 
-  **Three ways to price it**, one `pricing` block per version: `flat` (a fixed price per successful
-  run), `per_unit` (a price times an integer `units` the run returns, capped), and `cost_plus` (a
-  percent of the run's catalog step cost, capped). A variable price reserves the declared maximum
-  and settles the real amount, refunding the difference, so a caller always knows the worst case
-  before the run. The price settles to the maker as `earned` credit, spendable at once.
+  **Three ways to price it**, one `pricing` block per version, in the maker's words: `per_call` (a
+  fixed price per successful run), `per_result` (a price times the integer `results` the run
+  returns, bounded by a `results_from` input), and `percent` (a percent of the run's provider fees).
+  The provider fees are billed to the caller on top. A variable price holds the most the maker can
+  earn on that run (derived from the caller's ceiling or the results input, no declared cap needed)
+  and settles the real amount, refunding the difference. Callers never see the mode: every surface
+  leads with what recent successful runs cost, fees and price together, as one number or a
+  low–high range. The price settles to the maker as `earned` credit, spendable at once.
 
   **Two switches the maker controls**, neither bumping the version: `listed` puts the newest live
   version into catalog search, and `public_log` shows a run log on the tool's share page. A hub

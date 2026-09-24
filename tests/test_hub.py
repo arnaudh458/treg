@@ -121,62 +121,82 @@ def _no_price(m):
     return m
 
 
-def test_pricing_flat_block_normalizes():
-    v = validate(_no_price(_steps_manifest(pricing={"mode": "flat", "price_usd": 0.03})),
+_MICRO = {"price_micro": 0, "per_result_micro": 0, "percent_micro": 0, "max_price_micro": 0,
+          "results_from": None, "results_max": 0}
+
+
+def test_pricing_per_call_block_normalizes():
+    v = validate(_no_price(_steps_manifest(pricing={"mode": "per_call", "price_usd": 0.03})),
                  catalog_ids=CATALOG, own_tools=OWN)
     assert v.price_micro == 30_000
-    assert v.pricing == {"mode": "flat", "price_micro": 30_000, "per_unit_micro": 0,
-                         "markup_micro": 0, "max_price_micro": 0}
-    assert v.manifest["pricing"] == {"mode": "flat", "price_usd": 0.03}
+    assert v.pricing == {**_MICRO, "mode": "per_call", "price_micro": 30_000}
+    assert v.manifest["pricing"] == {"mode": "per_call", "price_usd": 0.03}
 
 
-def test_pricing_per_unit_block():
+def test_pricing_per_result_block():
+    """2026-09-18: per result, bounded by the `results_from` input's max; `results` is the count."""
+    m = _script_manifest(output={"fields": ["rows", "count", "results"]},
+                         pricing={"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"})
+    v = validate(m, catalog_ids=CATALOG, own_tools=OWN)
+    assert v.price_micro == 0
+    assert v.pricing == {**_MICRO, "mode": "per_result", "per_result_micro": 2_000,
+                         "results_from": "limit", "results_max": 100}
+    assert v.manifest["pricing"] == {"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}
+
+
+def test_pricing_percent_block():
+    v = validate(_no_price(_steps_manifest(pricing={"mode": "percent", "percent": 30})),
+                 catalog_ids=CATALOG, own_tools=OWN)
+    assert v.price_micro == 0
+    assert v.pricing == {**_MICRO, "mode": "percent", "percent_micro": 300_000}
+    assert v.manifest["pricing"] == {"mode": "percent", "percent": 30.0}
+
+
+def test_the_2026_09_14_pricing_names_still_validate_and_store_canonically():
+    """flat/per_unit/cost_plus, per_unit_usd, markup_percent and the once-required max_price_usd:
+    a maker's file from before the rename publishes unchanged and is stored in today's names."""
     m = _script_manifest(output={"fields": ["rows", "count", "units"]},
                          pricing={"mode": "per_unit", "per_unit_usd": 0.002, "max_price_usd": 0.5})
     v = validate(m, catalog_ids=CATALOG, own_tools=OWN)
-    assert v.price_micro == 0
-    assert v.pricing == {"mode": "per_unit", "price_micro": 0, "per_unit_micro": 2_000,
-                         "markup_micro": 0, "max_price_micro": 500_000}
-    assert v.manifest["pricing"] == {"mode": "per_unit", "per_unit_usd": 0.002, "max_price_usd": 0.5}
-
-
-def test_pricing_cost_plus_block():
-    v = validate(_no_price(_steps_manifest(pricing={"mode": "cost_plus", "markup_percent": 30,
-                                                    "max_price_usd": 1.0})),
+    assert v.pricing == {**_MICRO, "mode": "per_result", "per_result_micro": 2_000, "max_price_micro": 500_000}
+    assert v.manifest["pricing"] == {"mode": "per_result", "per_result_usd": 0.002, "max_price_usd": 0.5}
+    v = validate(_no_price(_steps_manifest(pricing={"mode": "cost_plus", "markup_percent": 30, "max_price_usd": 1.0})),
                  catalog_ids=CATALOG, own_tools=OWN)
-    assert v.price_micro == 0
-    assert v.pricing == {"mode": "cost_plus", "price_micro": 0, "per_unit_micro": 0,
-                         "markup_micro": 300_000, "max_price_micro": 1_000_000}
+    assert v.pricing == {**_MICRO, "mode": "percent", "percent_micro": 300_000, "max_price_micro": 1_000_000}
+    v = validate(_no_price(_steps_manifest(pricing={"mode": "flat", "price_usd": 0.03})), catalog_ids=CATALOG, own_tools=OWN)
+    assert v.manifest["pricing"] == {"mode": "per_call", "price_usd": 0.03}
 
 
-def test_legacy_flat_price_still_works():
+def test_legacy_price_usd_still_works():
     v = validate(_steps_manifest(price_usd=0.02), catalog_ids=CATALOG, own_tools=OWN)
-    assert v.price_micro == 20_000 and v.pricing["mode"] == "flat"
-    assert v.manifest["pricing"] == {"mode": "flat", "price_usd": 0.02}
+    assert v.price_micro == 20_000 and v.pricing["mode"] == "per_call"
+    assert v.manifest["pricing"] == {"mode": "per_call", "price_usd": 0.02}
 
 
 @pytest.mark.parametrize("m,field,words", [
-    (_steps_manifest(pricing={"mode": "flat", "price_usd": 0.01}), "price_usd", "not a top-level"),
+    (_steps_manifest(pricing={"mode": "per_call", "price_usd": 0.01}), "price_usd", "not a top-level"),
     (_no_price(_steps_manifest(pricing={"mode": "weird"})), "pricing.mode", "one of"),
-    (_script_manifest(output={"fields": ["rows", "units"]},
-                      pricing={"mode": "per_unit", "per_unit_usd": 0.001}), "pricing.max_price_usd", "finite"),
-    (_script_manifest(output={"fields": ["rows", "units"]},
-                      pricing={"mode": "per_unit", "per_unit_usd": 0, "max_price_usd": 0.5}),
-     "pricing.per_unit_usd", "above 0"),
-    (_script_manifest(output={"fields": ["rows", "units"]},
-                      pricing={"mode": "per_unit", "per_unit_usd": 0.5, "max_price_usd": 0.1}),
+    (_script_manifest(output={"fields": ["rows", "results"]},
+                      pricing={"mode": "per_result", "per_result_usd": 0.001}), "pricing.results_from", "name the"),
+    (_script_manifest(output={"fields": ["rows", "results"]},
+                      pricing={"mode": "per_result", "per_result_usd": 0.001, "results_from": "search"}),
+     "pricing.results_from", "`int` input with a `max`"),
+    (_script_manifest(output={"fields": ["rows", "results"]},
+                      pricing={"mode": "per_result", "per_result_usd": 0, "results_from": "limit"}),
+     "pricing.per_result_usd", "above 0"),
+    (_script_manifest(output={"fields": ["rows", "results"]},
+                      pricing={"mode": "per_result", "per_result_usd": 0.5, "max_price_usd": 0.1}),
      "pricing.max_price_usd", "at least"),
     (_script_manifest(output={"fields": ["rows", "count"]},
-                      pricing={"mode": "per_unit", "per_unit_usd": 0.001, "max_price_usd": 0.5}),
-     "output", "units"),
-    (_script_manifest(uses=["supabase"],
-                      pricing={"mode": "cost_plus", "markup_percent": 20, "max_price_usd": 1.0}),
+                      pricing={"mode": "per_result", "per_result_usd": 0.001, "results_from": "limit"}),
+     "output", "results"),
+    (_script_manifest(uses=["supabase"], pricing={"mode": "percent", "percent": 20}),
      "pricing.mode", "catalog"),
-    (_no_price(_steps_manifest(pricing={"mode": "cost_plus", "markup_percent": 0, "max_price_usd": 1.0})),
-     "pricing.markup_percent", "above 0"),
-    (_no_price(_steps_manifest(pricing={"mode": "flat", "price_usd": 0.01, "per_unit_usd": 0.001})),
-     "pricing.per_unit_usd", "not used by this mode"),
-    (_no_price(_steps_manifest(pricing={"mode": "flat", "nope": 1})), "pricing.nope", "unknown key"),
+    (_no_price(_steps_manifest(pricing={"mode": "percent", "percent": 0})),
+     "pricing.percent", "above 0"),
+    (_no_price(_steps_manifest(pricing={"mode": "per_call", "price_usd": 0.01, "per_result_usd": 0.001})),
+     "pricing.per_result_usd", "not used by this mode"),
+    (_no_price(_steps_manifest(pricing={"mode": "per_call", "nope": 1})), "pricing.nope", "unknown key"),
 ])
 def test_pricing_refusals(m, field, words):
     err = _refused(m)
@@ -597,7 +617,8 @@ async def test_catalog_get_answers_for_a_hub_id_and_hides_what_the_maker_hides(c
     assert r.status_code == 200, r.text
     e = r.json()["endpoint"]
     assert e["kind"] == "hub" and e["id"] == tool_id and e["version"] == 1 and e["status"] == "live"
-    assert e["cost"]["usd"] == 0.02 and e["price_line"].startswith("seller $0.02")
+    # cost.usd is what a run has cost (the check: $0.001 of steps + the $0.02 price), never the price alone
+    assert e["cost"]["usd"] == 0.021 and e["price_line"].startswith("seller $0.02") and e["price_samples"] >= 1
     assert e["inputs"]["domain"]["example"] == "figma.com" and e["output"] == {"leads": "$people.data"}
     assert e["call_template"]["cli"].startswith(f"treg call {tool_id} --data")
     assert e["page"].endswith(f"/hub/{tool_id}") and e["readme"] == "About it."
@@ -656,7 +677,7 @@ async def test_the_public_page_shows_the_contract_and_hides_the_makers_side(clie
     r = await clients.get(f"/hub/{tool_id}")            # no token: readable without sign-in
     assert r.status_code == 200, r.text
     html = r.text
-    assert "leads-db" in html and "seller $0.01 + steps" in html and "$10.00 per 1,000 runs" in html
+    assert "leads-db" in html and "seller $0.01 + provider fees" in html and "$10.00 per 1,000 runs" in html
     assert f"treg call {tool_id} --data" in html and f"/call/{tool_id}" in html
     assert "<b>returns</b>" in html and "<code>code</code>" in html and "<li>one</li>" in html   # the readme, rendered
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html                  # and escaped
@@ -844,25 +865,41 @@ async def test_the_makers_list_carries_health_and_thirty_day_numbers(clients: As
 # ---------------------------------------------------------------------------------------------
 # Pricing flexibility (9.2): the runner reserves the max, settles the real price, releases the rest.
 
-from treg.application.hub.runner import _PriceInvalid, _final_price  # noqa: E402
+from treg.application.hub.runner import _PriceInvalid, _final_price, _worst_case  # noqa: E402
 
 
-@pytest.mark.parametrize("pricing,output,spent,expected", [
-    ({"mode": "flat", "price_micro": 10_000}, {}, 0, 10_000),
-    ({"mode": "per_unit", "per_unit_micro": 2_000, "max_price_micro": 500_000}, {"units": 5}, 0, 10_000),
-    ({"mode": "per_unit", "per_unit_micro": 200_000, "max_price_micro": 500_000}, {"units": 5}, 0, 500_000),
-    ({"mode": "per_unit", "per_unit_micro": 2_000, "max_price_micro": 500_000}, {"units": 0}, 0, 0),
-    ({"mode": "cost_plus", "markup_micro": 300_000, "max_price_micro": 1_000_000}, {}, 200_000, 60_000),
-    ({"mode": "cost_plus", "markup_micro": 300_000, "max_price_micro": 50_000}, {}, 200_000, 50_000),
+@pytest.mark.parametrize("pricing,output,spent,held,expected", [
+    ({"mode": "per_call", "price_micro": 10_000}, {}, 0, 10_000, 10_000),
+    ({"mode": "per_result", "per_result_micro": 2_000}, {"results": 5}, 0, 200_000, 10_000),
+    ({"mode": "per_result", "per_result_micro": 2_000}, {"units": 5}, 0, 200_000, 10_000),      # the older name
+    ({"mode": "per_result", "per_result_micro": 200_000, "max_price_micro": 500_000}, {"results": 5}, 0, 500_000, 500_000),
+    ({"mode": "per_result", "per_result_micro": 2_000}, {"results": 0}, 0, 200_000, 0),
+    ({"mode": "per_result", "per_result_micro": 2_000}, {"results": 500}, 0, 200_000, 200_000),  # never above the hold
+    ({"mode": "percent", "percent_micro": 300_000}, {}, 200_000, 1_000_000, 60_000),
+    ({"mode": "percent", "percent_micro": 300_000, "max_price_micro": 50_000}, {}, 200_000, 1_000_000, 50_000),
+    ({"mode": "percent", "percent_micro": 300_000}, {}, 200_000, 0, 60_000),                   # the maker's own run: no hold
 ])
-def test_final_price(pricing, output, spent, expected):
-    assert _final_price(pricing, output, spent) == expected
+def test_final_price(pricing, output, spent, held, expected):
+    assert _final_price(pricing, output, spent, held) == expected
 
 
-@pytest.mark.parametrize("bad", [{}, {"units": "x"}, {"units": -1}, {"units": 1.5}, {"units": True}])
-def test_final_price_rejects_bad_units(bad):
+@pytest.mark.parametrize("bad", [{}, {"results": "x"}, {"results": -1}, {"results": 1.5}, {"results": True}])
+def test_final_price_rejects_bad_results(bad):
     with pytest.raises(_PriceInvalid):
-        _final_price({"mode": "per_unit", "per_unit_micro": 2_000, "max_price_micro": 500_000}, bad, 0)
+        _final_price({"mode": "per_result", "per_result_micro": 2_000}, bad, 0, 200_000)
+
+
+@pytest.mark.parametrize("pricing,inputs,ceiling,expected", [
+    ({"mode": "per_call", "price_micro": 10_000}, {}, 1_000_000, 10_000),
+    # percent: fees + part <= ceiling, so the most the part can be is p/(1+p) of the ceiling
+    ({"mode": "percent", "percent_micro": 250_000}, {}, 1_000_000, 200_000),
+    ({"mode": "percent", "percent_micro": 250_000, "max_price_micro": 50_000}, {}, 1_000_000, 50_000),
+    # per_result: the caller's own results input bounds the hold; the declared cap when there is none
+    ({"mode": "per_result", "per_result_micro": 2_000, "results_from": "limit"}, {"limit": 10}, 1_000_000, 20_000),
+    ({"mode": "per_result", "per_result_micro": 2_000, "results_from": None, "max_price_micro": 500_000}, {}, 1_000_000, 500_000),
+])
+def test_worst_case_hold_needs_no_declared_cap(pricing, inputs, ceiling, expected):
+    assert _worst_case(pricing, inputs, ceiling) == expected
 
 
 async def _publish_priced(clients, monkeypatch, pricing, *, n=5):
@@ -954,18 +991,45 @@ async def test_per_unit_check_with_non_integer_units_fails_to_publish(clients: A
     assert (await clients.post(f"/call/{r.json()['tool_id']}", json={"domain": "x"})).status_code == 404
 
 
-async def test_the_public_page_shows_a_per_unit_price(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+async def test_the_public_page_shows_a_per_result_price(clients: AsyncClient, hub_on, platform_on, monkeypatch):
     tool_id = await _publish_priced(clients, monkeypatch,
-                                    {"mode": "per_unit", "per_unit_usd": 0.002, "max_price_usd": 0.5}, n=5)
+                                    {"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}, n=5)
     page = (await clients.get(f"/hub/{tool_id}")).text
-    assert "per unit, up to" in page and "$0.5" in page
+    assert "seller $0.002 per result" in page and "$0.002/result" in page
 
 
 async def test_the_mine_list_carries_the_price_label(clients: AsyncClient, hub_on, platform_on, monkeypatch):
-    tool_id = await _publish_priced(clients, monkeypatch,
-                                    {"mode": "cost_plus", "markup_percent": 30, "max_price_usd": 0.5}, n=3)
+    tool_id = await _publish_priced(clients, monkeypatch, {"mode": "percent", "percent": 30}, n=3)
     row = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
-    assert row["pricing"]["mode"] == "cost_plus" and "+30%" in row["price_label"]
+    assert row["pricing"]["mode"] == "percent" and row["price_label"] == "30% of provider fees"
+
+
+async def test_every_price_surface_leads_with_the_observed_range(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """2026-09-18: the headline price is what a run actually cost (steps + seller part) over recent
+    successful runs, one number or a low–high range; the formula (`price_label`) is the detail. Before
+    any run the declared worst case shows, with the steps unknown."""
+    from treg.domain.hub import range_label, seller_part_micro
+    m = {"uses": ["crustdata.companies.enrich"], "pricing": {"mode": "percent", "percent": 25}}
+    assert range_label(m, None, None) == "provider fees + 25%"
+    assert range_label({"uses": ["a.b"], "pricing": {"mode": "per_call", "price_usd": 0.01}}, None, None) == "$0.01/run + provider fees"
+    assert range_label({"uses": ["own"], "pricing": {"mode": "per_call", "price_usd": 0.01}}, None, None) == "$0.01/run"
+    assert range_label({"uses": ["a.b"], "pricing": {"mode": "per_call", "price_usd": 0}}, None, None) == "free + provider fees"
+    assert range_label(m, 750_000, 750_000) == "$0.75/run" and range_label(m, 750_000, 1_225_000) == "$0.75–$1.225/run"
+    pr = {"inputs": {"limit": {"type": "int", "max": 100}}, "uses": ["a.b"],
+          "pricing": {"mode": "per_result", "per_result_usd": 0.02, "results_from": "limit"}}
+    assert range_label(pr, None, None) == "$0.02/result + provider fees"
+    assert range_label(pr, 200_000, 2_000_000) == "$0.02/result · $0.2–$2/run"
+    assert seller_part_micro(m, 600_000, None) == 150_000          # the maker's own run: derived from the fees
+    assert seller_part_micro(m, 600_000, 20_000) == 20_000         # a caller's run: what they paid
+    assert seller_part_micro({**m, "pricing": {**m["pricing"], "max_price_usd": 0.5}}, 4_000_000, None) == 500_000
+    assert seller_part_micro(pr, 0, None, {"rows": [], "results": 7}) == 140_000   # the maker's own per_result run
+    tool_id = await _publish_priced(clients, monkeypatch, {"mode": "percent", "percent": 30}, n=3)
+    row = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
+    assert row["price_samples"] >= 1 and row["price_range"].startswith("$") and "up to" not in row["price_range"]
+    page = (await clients.get(f"/hub/{tool_id}.md")).text
+    assert f"**Price:** {row['price_range']}" in page and "+30%" not in page.split("**Price:**")[1].split("\n")[0].split("seller")[0]
+    got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]
+    assert got["price_range"] == row["price_range"] and got["price_samples"] == row["price_samples"]
 
 
 async def test_earnings_report_carries_the_average_price(clients: AsyncClient, hub_on, platform_on, monkeypatch):
@@ -1024,7 +1088,7 @@ async def test_a_listed_hub_tool_appears_in_search_and_unlisted_or_retired_does_
     body = (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()
     row = [r for r in body["results"] if r["id"] == tool_id][0]
     assert row["kind"] == "hub" and row["provider"] and row["price_line"].startswith("seller ")
-    assert row["cost"]["usd"] == 0.01 and "score" in row and "script" not in row and "uses" not in row
+    assert row["cost"]["usd"] == 0.011 and row["price_range"] == "$0.011/run" and "score" in row and "script" not in row and "uses" not in row
     assert body["hints"][0] == f"treg catalog get {tool_id}   # params, cost and an example response" or tool_id in json.dumps(body["hints"])
     assert (await clients.delete(f"/hub/tools/{tool_id}")).status_code == 200      # retired never appears
     ids = [r["id"] for r in (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()["results"]]
@@ -1040,7 +1104,7 @@ async def test_mcp_catalog_search_returns_a_listed_hub_tool(clients: AsyncClient
     async with mcp_session(clients) as c:
         out = await _call_tool(c, "catalog_search", {"query": Q_OWN_WORDS, "limit": 10}, token=token)
     row = [r for r in out["results"] if r["endpoint_id"] == tool_id][0]
-    assert row["kind"] == "hub" and row["no_key_needed"] is True and row["usd_per_call"] == 0.01
+    assert row["kind"] == "hub" and row["no_key_needed"] is True and row["usd_per_call"] == 0.011
 
 
 # ---------------------------------------------------------------------------------------------

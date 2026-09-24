@@ -85,5 +85,40 @@ also requires an integer `units` in the output. A tool with a broken price never
 Add one column, `avg_price_micro`, the earned amount divided by the successful runs. No per-unit
 breakdown, just the average price per successful run, so the maker sees how the variable price lands.
 
+## Round 3 — the headline (2026-09-18)
+
+**1. What price does a caller read first?**
+A range, not the formula. "steps +25% up to $0.5/run" is accurate and unreadable. The headline on
+every surface (the dashboard list and overview, `treg hub ls`, the public page, `catalog_get`, a
+search row) is what a successful run actually cost, steps and seller price together, over the last
+30 days: one number when every run cost the same, `$low–$high/run` otherwise. The formula stays
+as the second line, for the maker (`price_label`).
+
+**2. Whose runs count?**
+Every successful run, the maker's own and the scheduled checks included: the steps cost the same
+whoever calls, and a new tool would otherwise show nothing until a stranger pays. A run the maker
+did not pay a price on gets the seller part derived from the pricing block and its step cost
+(`seller_part_micro`); a caller's run uses the price they paid. Min–max, not a trimmed band: a
+caller who picks the expensive mode should see it.
+
+**3. Before any run?**
+The maker's price with the fees unknown: "$0.15/run + provider fees", "$0.02/result + provider
+fees", "provider fees + 5%", "free + provider fees" (no "+ provider fees" when the tool calls only
+the maker's own tools). `price_samples` says how many runs the headline rests on.
+
+**4. The maker's words, and no cap.** The modes are renamed to what a maker would say: `per_call`
+(was `flat`), `per_result` (was `per_unit`, the count is `results`, `units` still read), `percent`
+(was `cost_plus`, the field is `percent`). Makers read "$0.15 per call", "$0.02 per result", "5% of
+provider fees"; the phrase "steps +25% up to $0.5/run" is gone. `max_price_usd` is no longer
+required: it was the runner's need for a worst case to hold, dressed up as a pricing field. The
+hold is now derived from what bounds the run: for `percent`, the caller's ceiling (fees + part ≤
+ceiling); for `per_result`, the `results_from` input's value. A maker may still declare a lower cap.
+The old names validate and are stored canonically, so no published tool changes.
+
+**5. Not built: all-in pricing.** A maker who wants a sticker price that absorbs the provider fees
+("$1.00 per run, I pay the providers") has no mode; the caller always pays the steps directly. It
+would make a hub tool look like a product rather than a markup, and it changes the money flow (the
+maker needs balance to serve calls). Named for the backlog.
+
 ## The backlog, in the order it was named
 (none named in this session)

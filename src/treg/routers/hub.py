@@ -130,11 +130,15 @@ async def my_hub_tools(
         select(HubRun.tool_id, func.count(HubRun.id), func.coalesce(func.sum(HubRun.price_micro), 0))
         .where(HubRun.maker_org_id == caller.org_id, HubRun.caller_org_id != caller.org_id,
                HubRun.version > 0, HubRun.started_at >= since).group_by(HubRun.tool_id))).all()}
+    newest: dict[str, dict] = {}
+    for r in rows:
+        newest.setdefault(r.tool_id, r.manifest)
+    ranges = await hub_app.price_ranges(db, newest)
     out = []
     for r in rows:
         h = await hub_health.health_of(db, r.tool_id, r.version, r.check_result)
         out.append({**hub_app.view(r), "health": h.state, "fails_in_a_row": h.fails_in_a_row,
-                    "last_run_at": h.last_run_at,
+                    "last_run_at": h.last_run_at, **hub_app.with_range(r.manifest, ranges.get(r.tool_id)),
                     **stats.get(r.tool_id, {"runs_30d": 0, "earned_30d_micro": 0})})
     return out
 

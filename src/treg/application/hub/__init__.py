@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
-from ...domain.hub import ManifestError, price_label, validate, validate_check, validate_readme
+from ...domain.hub import ManifestError, canon_pricing, price_label, validate, validate_check, validate_readme
 from ...models import HubTool, Org, Tool
 
 HUB_ID_MIN_PARTS = 2
@@ -217,13 +217,73 @@ async def run_check(db: AsyncSession, row: HubTool, *, maker_headers: dict[str, 
         return verdict
 
 
+async def price_ranges(db: AsyncSession, tools: dict[str, dict[str, Any]], *, days: int = 30) -> dict[str, dict[str, Any]]:
+    """Per tool id: the lowest and highest total a successful run cost in the last `days` (steps plus
+    the seller's part, `seller_part_micro`) and the sample count, over EVERY successful run of that
+    tool, the maker's own and the scheduled checks included: the steps cost the same whoever calls,
+    and a new tool would otherwise show no number until a stranger pays. `tools` maps a tool id to
+    the manifest that prices it (the newest). A tool with no run is absent from the answer."""
+    from datetime import timedelta
+    from ...domain.hub import seller_part_micro
+    from ...models import HubRun
+    from ...timeutil import utcnow_naive
+    if not tools:
+        return {}
+    since = utcnow_naive() - timedelta(days=days)
+    recent = (HubRun.tool_id.in_(list(tools)), HubRun.version > 0, HubRun.status == "ok", HubRun.started_at >= since)
+    own = HubRun.caller_org_id == HubRun.maker_org_id
+    # The output (up to 2 MB a run) is read only where the seller part is derived from it: the maker's
+    # own runs of a per_result tool. Catalog search calls this for every listed tool.
+    per_result = [tid for tid, m in tools.items()
+                  if canon_pricing(m.get("pricing") or {}).get("mode") == "per_result"]
+    outputs: dict[int, Any] = {}
+    if per_result:
+        outputs = dict((await db.execute(select(HubRun.id, HubRun.output).where(
+            *recent, own, HubRun.tool_id.in_(per_result)))).all())
+    out: dict[str, dict[str, Any]] = {}
+    for rid, tid, cost, price, is_own in (await db.execute(
+            select(HubRun.id, HubRun.tool_id, HubRun.cost_micro, HubRun.price_micro, own)
+            .where(*recent))).all():
+        total = int(cost or 0) + seller_part_micro(tools[tid], int(cost or 0), None if is_own else int(price or 0),
+                                                   outputs.get(rid))
+        r = out.setdefault(tid, {"low_micro": total, "high_micro": total, "samples": 0})
+        r["low_micro"], r["high_micro"] = min(r["low_micro"], total), max(r["high_micro"], total)
+        r["samples"] += 1
+    return out
+
+
+def with_range(manifest: dict[str, Any], rng: dict[str, Any] | None) -> dict[str, Any]:
+    """The keys every price surface carries: `price_range` (the headline, `range_label`),
+    `price_samples` (how many runs it rests on; 0 means the declared worst case) and the observed
+    `price_low_micro`/`price_high_micro` (None before any run) for a surface that shows the numbers
+    alone."""
+    from ...domain.hub import range_label
+    rng = rng or {}
+    return {"price_range": range_label(manifest, rng.get("low_micro"), rng.get("high_micro")),
+            "price_samples": int(rng.get("samples", 0)),
+            "price_low_micro": rng.get("low_micro"), "price_high_micro": rng.get("high_micro")}
+
+
+def worst_usd(manifest: dict[str, Any], price_micro: int, rng: dict[str, Any] | None) -> float | None:
+    """`cost.usd` for a hub row: the most a run has cost recently (steps and seller part) when runs
+    exist, else the per-call price, else a declared cap, else None (a variable price with no run
+    yet has no number to promise)."""
+    from ...domain.hub import canon_pricing
+    if rng and rng.get("samples"):
+        return rng["high_micro"] / 1_000_000
+    p = canon_pricing(manifest.get("pricing") or {"mode": "per_call", "price_usd": price_micro / 1_000_000})
+    if p.get("mode", "per_call") == "per_call":
+        return float(p.get("price_usd", price_micro / 1_000_000) or 0)
+    return float(p["max_price_usd"]) if p.get("max_price_usd") else None
+
+
 def view(row: HubTool) -> dict[str, Any]:
     """The maker-facing shape of one version. The script is the maker's own; it is returned to
     the maker here and to nobody else (the public page of phase 7 hides it)."""
     return {
         "tool_id": row.tool_id, "version": row.version, "kind": row.kind, "status": row.status,
         "summary": row.summary, "writes": row.writes, "price_usd": row.price_micro / 1_000_000,
-        "pricing": row.manifest.get("pricing", {"mode": "flat", "price_usd": row.price_micro / 1_000_000}),
+        "pricing": canon_pricing(row.manifest.get("pricing") or {"mode": "per_call", "price_usd": row.price_micro / 1_000_000}),
         "listed": bool(row.listed), "public_log": bool(row.public_log),
         "price_label": price_label(row.manifest),
         "uses": row.manifest.get("uses", []), "inputs": row.manifest.get("inputs", {}),
@@ -275,11 +335,11 @@ async def set_price(db: AsyncSession, *, org_id: int, tool_id: str, price_usd: f
         .order_by(HubTool.version.desc()).limit(1))).scalars().first()
     if row is None:
         return None
-    # `treg hub price` sets one flat price, so the pricing block is normalized to flat (a maker who
-    # wants a variable price publishes a new version with a `pricing` block).
+    # `treg hub price` sets one per-call price, so the pricing block is normalized to per_call (a
+    # maker who wants a variable price publishes a new version with a `pricing` block).
     row.price_micro = micro
     row.manifest = {**row.manifest, "price_usd": micro / 1_000_000,
-                    "pricing": {"mode": "flat", "price_usd": micro / 1_000_000}}
+                    "pricing": {"mode": "per_call", "price_usd": micro / 1_000_000}}
     db.add(row)
     return row
 
@@ -317,20 +377,20 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
         a = agg.setdefault(tid, [0, 0])
         a[0] += 1
         a[1] += 1 if status == "ok" else 0
+    ranges = await price_ranges(db, {tid: r.manifest for tid, r in newest.items()})
     extra = []
     for tid, r in newest.items():
         m = r.manifest
         slug = slugs.get(r.org_id, "")
-        p = m.get("pricing") or {"mode": "flat", "price_usd": r.price_micro / 1_000_000}
-        worst = (float(p["max_price_usd"]) if p.get("mode") in ("per_unit", "cost_plus")
-                 else float(p.get("price_usd", r.price_micro / 1_000_000)))
+        worst = worst_usd(m, r.price_micro, ranges.get(tid))
         ep = {
             "id": tid, "kind": "hub", "hub": True, "version": r.version,
             "name": r.name, "summary": r.summary, "provider": slug, "provider_display": slug,
             "capability": None, "capability_description": "", "platform": "", "tier": "core", "verified": True,
             "method": "POST", "path": f"/call/{tid}", "writes": r.writes,
             "cost": {"type": "per_success", "usd": worst, "currency": "USD", "unit": "run"},
-            "price_line": "seller " + price_label(m) + " + steps", "price_label": price_label(m),
+            "price_line": "seller " + price_label(m) + " + provider fees", "price_label": price_label(m),
+            **with_range(m, ranges.get(tid)),
             "made_of": len(m.get("uses", [])),
         }
         fields = [(catalog_store.W_SUMMARY, f"{r.name} {r.summary}".lower()),

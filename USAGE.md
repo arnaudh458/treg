@@ -497,16 +497,19 @@ or a full URL under such a tool's base URL. Never paste a credential into a scri
 first (`treg secret add`, `treg tool add`), list the tool in `uses`, name it in `ctx.call`.
 Callers run it with `treg call <id> --data '{…}'`; read its contract with `treg catalog get <id>`.
 
-**Pricing.** `recipe.json` carries either a flat `price_usd`, or a `pricing` block with a `mode`:
+**Pricing.** `recipe.json` carries either a `price_usd`, or a `pricing` block with a `mode`. It is
+your price only: the provider fees (the catalog steps) are billed to the caller on top.
 
-| mode | fields | the caller pays for the price |
+| mode | fields | you earn per successful run |
 |---|---|---|
-| `flat` | `price_usd` | a fixed price per successful run |
-| `per_unit` | `per_unit_usd`, `max_price_usd` | `per_unit_usd` times an integer `units` your code returns (declare `units` as an output field), capped at `max_price_usd` |
-| `cost_plus` | `markup_percent`, `max_price_usd` | that percent of the run's catalog step cost (the tool must call a catalog tool), capped at `max_price_usd` |
+| `per_call` | `price_usd` | a fixed price |
+| `per_result` | `per_result_usd`, `results_from` | `per_result_usd` times the integer `results` your code returns (declare `results` as an output field); `results_from` names the `int` input whose `max` bounds one run |
+| `percent` | `percent` | that percent of the run's provider fees (the tool must call a catalog tool) |
 
-The metered steps are billed on top. `treg hub price <id> <usd>` sets a flat price, so it turns a
-variable tool back to flat; a variable price is set by publishing a new version with a `pricing` block.
+An optional `max_price_usd` lowers what you earn on one run; it is never required. Callers never
+see the mode: every surface shows them what recent successful runs cost, low to high, fees and your
+price together. `treg hub price <id> <usd>` sets a per-call price, so it turns a variable tool back
+to per_call; a variable price is set by publishing a new version with a `pricing` block.
 ## Anonymous usage analytics
 
 When using treg.to, the CLI sends basic usage through PostHog: command name, success/exit code,

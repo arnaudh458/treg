@@ -421,12 +421,13 @@ and `200` when it is on.
   README.md); `treg hub run . --input k=v` runs the folder for real, nothing stored; `treg hub
   publish .` validates, runs check.json once on your balance, and the tool is live on pass. Over
   MCP: `hub_create`, `hub_update`, `hub_mine`.
-- **Pricing** — a `pricing` block in recipe.json, or the flat `price_usd`. Three modes, one per
-  tool: `{"mode":"flat","price_usd":0.02}`; `{"mode":"per_unit","per_unit_usd":0.002,
-  "max_price_usd":0.5}` (price = per_unit times an integer `units` your code returns, declared as an
-  output field, capped at max); `{"mode":"cost_plus","markup_percent":30,"max_price_usd":0.5}` (that
-  percent of the run's catalog step cost, needs one catalog tool in `uses`, capped at max). The
-  caller pays your price plus the metered steps.
+- **Pricing** — a `pricing` block in recipe.json, or a plain `price_usd`. Your price only; the
+  provider fees (catalog steps) are billed to the caller on top. Three modes, one per tool:
+  `{"mode":"per_call","price_usd":0.02}`; `{"mode":"per_result","per_result_usd":0.002,
+  "results_from":"limit"}` (per result: your code returns an integer `results`, declared as an
+  output field; `results_from` names the `int` input whose `max` bounds one run);
+  `{"mode":"percent","percent":5}` (that percent of the run's provider fees, needs one catalog tool
+  in `uses`). Callers see what recent runs cost, low to high, fees and your price together.
 - **The run's spending cap** is the caller's `X-Treg-Run-Max-Cost`; when the caller sends none, the
   tool's own `"limits": {"cost_usd": 3}` in recipe.json; else $1.00. A run that would pass it is
   stopped and returns nothing, so a script making several paid calls adds up each result's

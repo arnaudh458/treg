@@ -789,7 +789,8 @@ h2,h3,h4,.tut-main h2{font-family:var(--sans);font-weight:500;letter-spacing:-.2
 .btn,.seg button,.tabs button,.mk-tabs button,.side .nav,.frow input,.frow select,
 .field input,.field select,.search input,.msel,.bindinput,.sub,.lead,p,label,
 .side .grp,.acct-you,.kv,.chip,.badge{font-family:var(--sans)}
-.stat .n{font-family:var(--mono);font-weight:500;font-variant-numeric:tabular-nums}
+.stat .n{font-family:var(--mono);font-weight:500;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.stat .n.sm{font-size:18px;line-height:1.3}
 .mono,pre,code,.term,.cli,.ttable .tn b,.side .ac-label{font-family:var(--mono)}
 h1{font-size:22px;letter-spacing:-.44px} h2{font-size:17px} h3{font-size:15px}
 .sub{font-size:12.5px;color:var(--muted);max-width:74ch}
@@ -2953,7 +2954,7 @@ product, including per-customer usage tracking and billing.</pre>
                 <td>{{t.version}}</td>
                 <td><span :class="{ok:t.status==='live', warn:t.status==='failed', muted:t.status==='retired'}">{{t.status}}</span></td>
                 <td>{{t.kind}}</td>
-                <td>${{t.price_usd}}</td>
+                <td :title="t.price_label">{{t.price_range||t.price_label||('$'+t.price_usd+'/run')}}<span v-if="t.price_samples" class="muted"> · {{t.price_samples}} runs</span></td>
                 <td><span :class="{ok:t.health==='ok', warn:t.health==='failing', muted:t.health==='unknown'}">{{t.health}}</span><span v-if="t.fails_in_a_row" class="muted"> · {{t.fails_in_a_row}} failed in a row</span></td>
                 <td style="text-align:right">{{t.runs_30d}}</td>
                 <td style="text-align:right">{{money(t.earned_30d_micro)}}</td>
@@ -2984,7 +2985,8 @@ product, including per-customer usage tracking and billing.</pre>
 
             <template v-if="hub.tab==='overview'">
               <div class="statgrid" style="margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
-                <div class="stat"><div class="n">${{hub.tool.price_usd}}</div><div class="l">your price per run</div></div>
+                <div class="stat"><div class="n">{{hubRunCost(hub.tool)}}</div><div class="l">{{hub.tool.price_samples ? 'a run cost the caller, fees + your price ('+hub.tool.price_samples+' recent runs)' : 'a run costs the caller (no runs yet)'}}</div></div>
+                <div class="stat"><div class="n sm">{{hub.tool.price_label}}</div><div class="l">your price</div></div>
                 <div class="stat"><div class="n">{{hub.tool.runs_30d}}</div><div class="l">runs by others, 30d</div></div>
                 <div class="stat"><div class="n">{{money(hub.tool.earned_30d_micro)}}</div><div class="l">earned, 30d</div></div>
                 <div class="stat"><div class="n">{{hub.tool.health}}</div><div class="l">health</div></div>
@@ -3016,9 +3018,20 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
             </template>
 
             <template v-if="hub.tab==='price'">
-              <p class="sub">What a caller pays you per successful run, on top of the metered steps. Applies to later runs; every trace stamps the price it paid. No version bump. 0 = free.</p>
-              <div class="frow"><label>price_usd</label><input v-model="hub.price" type="number" step="0.001" min="0" max="100" style="max-width:140px"><button class="btn primary sm" :disabled="hub.priceSaving||!canRegister" @click="saveHubPrice()">Save</button></div>
-              <p class="sub">Callers see: <b>seller ${{Number(hub.price||0)}} + steps</b> · ${{(Number(hub.price||0)*1000).toFixed(2)}} per 1,000 runs. Earned credit lands on your balance at once. No platform share in the MVP.</p>
+              <!-- Display only. Pricing is a block in recipe.json with three modes and optional bounds,
+                   so a form here would cover one mode and silently flatten the others. The maker's
+                   agent edits the block and publishes; the check gates the new version. -->
+              <div class="statgrid" style="margin:12px 0;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))">
+                <div class="stat"><div class="n sm">{{hub.tool.price_label}}</div><div class="l">your price</div></div>
+                <div class="stat"><div class="n">{{hubRunCost(hub.tool)}}</div><div class="l">{{hub.tool.price_samples ? 'what a run cost the caller, '+hub.tool.price_samples+' recent runs' : 'no runs yet'}}</div></div>
+              </div>
+              <p class="sub">{{hubPriceExplain(hub.tool)}} Provider fees (the catalog steps) are billed to the caller on top at cost; you pay nothing from them. Earned credit lands on your balance at once. No platform share in the MVP.</p>
+              <div class="lbl">The pricing block in recipe.json <span class="muted">(version {{hub.tool.version}})</span></div>
+              <pre style="white-space:pre-wrap">{{JSON.stringify(hub.tool.pricing||{}, null, 2)}}</pre>
+              <div class="lbl" style="margin-top:12px">Change it</div>
+              <p class="sub">Ask your agent: it edits the <span class="mono">pricing</span> block and publishes a new version, which goes live once its check passes. Callers pinned to <span class="mono">@{{hub.tool.version}}</span> keep this price.</p>
+              <pre style="white-space:pre-wrap">{{hubPricePrompt(hub.tool)}}</pre>
+              <button class="btn primary sm" @click="copyText(hubPricePrompt(hub.tool),'the prompt')">Copy prompt for your agent</button>
             </template>
 
             <template v-if="hub.tab==='listing'">
@@ -4151,7 +4164,7 @@ createApp({
     // hub.tools: every version of the team's tools (newest first) with health + 30-day numbers.
     // hub.tool: the opened tool (its newest row); hub.tab: overview|versions|price|earnings|runs|health.
     // run: the opened run (/app/runs/<id>), for the caller or the maker.
-    const hubState={ hubOn:false, hub:{loading:false, tools:[], tool:null, tab:'overview', earnings:null, health:null, price:'', priceSaving:false, err:'', note:'', confirmRetire:null, runOpen:null},
+    const hubState={ hubOn:false, hub:{loading:false, tools:[], tool:null, tab:'overview', earnings:null, health:null, err:'', note:'', confirmRetire:null, runOpen:null},
                      run:{loading:false, data:null, err:''} };
     let cfg={active:null,orgs:{}}; try{ cfg=JSON.parse(localStorage.getItem(LS))||cfg; }catch(e){}
     return { ...hubState,
@@ -5116,16 +5129,25 @@ createApp({
     hubEarned30(){ return this.hubNewest().reduce((a,t)=>a+(t.earned_30d_micro||0),0); },
     hubRuns30(){ return this.hubNewest().reduce((a,t)=>a+(t.runs_30d||0),0); },
     hubFailing(){ return this.hubNewest().filter(t=>t.health==='failing').length; },
-    async openHubTool(t, tab){ this.hub={...this.hub, tool:t, tab:tab||'overview', earnings:null, health:null, price:String(t.price_usd), runOpen:null};
+    async openHubTool(t, tab){ this.hub={...this.hub, tool:t, tab:tab||'overview', earnings:null, health:null, runOpen:null};
       await Promise.all([this.loadHubEarnings(), this.loadHubHealth()]); },
     closeHubTool(){ this.hub={...this.hub, tool:null, runOpen:null}; },
     async loadHubEarnings(){ if(!this.hub.tool) return; try{ this.hub.earnings=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id)+'/earnings?days=90'); }catch(e){ this.hub.earnings=null; } },
     async loadHubHealth(){ if(!this.hub.tool) return; try{ this.hub.health=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id)+'/health'); }catch(e){ this.hub.health=null; } },
-    async saveHubPrice(){ if(!this.hub.tool) return; this.hub.priceSaving=true; this.hub.err='';
-      try{ await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id), {method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({price_usd:Number(this.hub.price)})});
-           await this.loadHub(); this.hub.note='Price saved; applies to later runs.'; setTimeout(()=>{ this.hub.note=''; }, 2500); }
-      catch(e){ this.hub.err=this.hubErr(e); }
-      this.hub.priceSaving=false; },
+    hubRunCost(t){ const lo=t.price_low_micro, hi=t.price_high_micro;
+      if(lo==null||hi==null) return '—';
+      return lo===hi ? this.money(lo) : this.money(lo)+'–'+this.money(hi); },
+    hubPriceExplain(t){ const p=t.pricing||{};
+      if(p.mode==='per_result') return 'You earn $'+p.per_result_usd+' for each result a successful run returns (its integer `results` field)'
+        +(p.results_from?'; the hold is bounded by the `'+p.results_from+'` input.':'.')+(p.max_price_usd?' At most $'+p.max_price_usd+' a run.':'');
+      if(p.mode==='percent') return 'You earn '+p.percent+'% of the provider fees each successful run spends.'+(p.max_price_usd?' At most $'+p.max_price_usd+' a run.':'');
+      return Number(p.price_usd||0) ? 'You earn $'+p.price_usd+' on each successful run.' : 'Free: callers pay only the provider fees.'; },
+    hubPricePrompt(t){ return 'Change the price of my treg hub tool '+t.tool_id+' (now: '+t.price_label+').\n'
+      +'New price: <describe it, e.g. "$0.05 per call", "$0.01 per result, at most $0.50 a run", "15% of the provider fees">.\n\n'
+      +'Edit the `pricing` block in its recipe.json. Modes: {"mode":"per_call","price_usd":N} | '
+      +'{"mode":"per_result","per_result_usd":N,"results_from":"<int input with a max>"} (the script returns an integer `results`) | '
+      +'{"mode":"percent","percent":N} (needs a catalog tool in `uses`). `max_price_usd` optionally caps the two variable modes. '
+      +'Work in the folder it was published from, then run `treg hub publish <folder>` and confirm the new version is live (`treg hub ls`).'; },
     async setHubFlag(field, value){ if(!this.hub.tool) return; this.hub.flagSaving=true; this.hub.err='';
       try{ const d=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id), {method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({[field]:!!value})});
            this.hub.tool={...this.hub.tool, [field]:d[field]}; await this.loadHub();

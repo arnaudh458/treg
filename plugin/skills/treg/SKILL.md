@@ -333,13 +333,19 @@ Caps: 120 s, 20 calls, 64 MB, four runs at a time per team. A steps recipe inste
 `steps` and reads earlier answers with references (`$input.x`, `$step.path`, `$step[]`,
 `$step.length`); steps that do not depend on each other run four at a time.
 
-**Pricing — one mode per tool.** In `recipe.json`, either a flat `price_usd`, or a `pricing` block:
-- `{"mode": "flat", "price_usd": 0.02}` — a fixed price per successful run.
-- `{"mode": "per_unit", "per_unit_usd": 0.002, "max_price_usd": 0.5}` — `per_unit_usd` times an
-  integer `units` your code returns (declare `units` as an output field), capped at `max_price_usd`.
-- `{"mode": "cost_plus", "markup_percent": 30, "max_price_usd": 0.5}` — that percent of the run's
-  catalog step cost (the tool must call at least one catalog tool), capped at `max_price_usd`.
-The caller pays your price plus the metered steps; the caller's `X-Treg-Run-Max-Cost` caps the whole run, and when the caller sends none your `limits.cost_usd` does (else $1.00). A run that passes the cap is stopped and returns nothing, so a script that makes several paid calls should add up `cost_usd` and stop early.
+**Pricing — one mode per tool, your price only.** The provider fees (the catalog steps) are billed
+to the caller on top; your price is what you earn per successful run. In `recipe.json`, either a
+`price_usd`, or a `pricing` block:
+- `{"mode": "per_call", "price_usd": 0.02}` — a fixed price per successful run.
+- `{"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}` — per result returned:
+  your code returns an integer `results` (declare it as an output field); `results_from` names the
+  `int` input whose `max` bounds one run.
+- `{"mode": "percent", "percent": 5}` — that percent of the run's provider fees (the tool must call
+  at least one catalog tool).
+Callers never see the mode: they see what recent runs cost, low to high, fees and your price together.
+The caller's `X-Treg-Run-Max-Cost` caps the whole run, your price included; when the caller sends none your
+`limits.cost_usd` does (else $1.00). A run that passes the cap is stopped and returns nothing, so a script
+that makes several paid calls should add up `cost_usd` and stop early.
 
 **The road:**
 
