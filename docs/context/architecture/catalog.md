@@ -135,6 +135,10 @@ posts and reactions, post comments and reactions, and the combined engagement re
 strict-query GET tools and are available through BYOK or the platform key; the normal own-key-first
 ladder keeps a team's credential unmetered. `GET /api/v1/subscription` is deliberately internal:
 it is the free connection probe and capacity collector rather than an account-kind catalog tool.
+Verified adapters add profile, company, member posts, post comments and post reactions to their
+provider-neutral LinkedIn routes. The member-posts contract compares Fetchin with Aviato and
+HarvestAPI; member reactions and combined engagement remain direct Fetchin tools because no shared
+contracts describe those provider-native operations.
 
 Live balance deltas on 2026-09-24 confirmed one credit for every ordinary successful route and two
 for combined engagement. The shared account's acquired PAYG replacement rate is $1.50 per 1,000

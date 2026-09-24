@@ -171,6 +171,66 @@ def test_serper_routes_search_and_single_page_extract_only():
     assert not direct & set(cat.adapters)
 
 
+def test_fetchin_linkedin_adapters_are_verified_and_routed():
+    cat = catalog_store.load()
+    routed = {
+        "fetchinio.linkedin.user.profile": "treg.linkedin.user.profile",
+        "fetchinio.linkedin.company.profile": "treg.linkedin.company.profile",
+        "fetchinio.linkedin.user.posts": "treg.linkedin.user.posts",
+        "fetchinio.linkedin.post.comments": "treg.linkedin.post.comments",
+        "fetchinio.linkedin.post.reactions": "treg.linkedin.post.reactions",
+    }
+    for child, parent in routed.items():
+        assert cat.adapters[child].verified
+        assert not cat.adapters[child].verify_note
+        assert child in cat.by_id[parent]["routed_children"]
+
+    # The new posts route is genuinely comparative, not a synthetic one-provider wrapper.
+    assert {
+        "aviato.linkedin.user.posts",
+        "fetchinio.linkedin.user.posts",
+        "harvestapi.linkedin.user.posts",
+    } <= set(cat.by_id["treg.linkedin.user.posts"]["routed_children"])
+
+    # Fetchin has no provider-neutral contracts for these provider-native operations.
+    assert "fetchinio.linkedin.user.reactions" not in cat.adapters
+    assert "fetchinio.linkedin.post.engagement" not in cat.adapters
+
+
+async def test_fetchin_member_posts_route_uses_adapter_and_settles(
+    clients: AsyncClient, platform_on, monkeypatch,
+):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FETCHINIO", "PLATFORM-FETCHINIO")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "fetchinio")
+    get_settings.cache_clear()
+    seen = []
+    monkeypatch.setattr(call_service, "relay", _relay_by_provider({
+        "fetchin.io": [(200, {
+            "posts": [{"id": "urn:li:activity:1", "text": "hello"}],
+            "paginationToken": "next-page",
+            "hasMore": True,
+        })],
+    }, seen))
+
+    before = await _balance(clients)
+    response = await clients.post(
+        "/call/treg.linkedin.user.posts",
+        json={"linkedin_handle": "satyanadella", "limit": 1},
+        headers={"X-Treg-Route-Prefer": "fetchinio"},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["_treg"]["served_by"] == "fetchinio.linkedin.user.posts"
+    assert data["output"]["posts"] == [{"id": "urn:li:activity:1", "text": "hello"}]
+    assert data["output"]["next_cursor"] == "next-page"
+    assert data["output"]["has_more"] is True
+    assert seen == [("fetchin.io", "GET", {
+        "profileUrlOrUrn": "https://www.linkedin.com/in/satyanadella", "count": "1",
+    }, None)]
+    assert before - await _balance(clients) == 1_500
+    get_settings.cache_clear()
+
+
 async def test_tavily_routed_empty_search_is_a_paid_miss_then_falls_through(
     clients, monkeypatch,
 ):
