@@ -708,14 +708,6 @@ async def test_byok_task_status_keeps_direct_provider_object_access(
 
 @pytest.mark.parametrize(("start", "payload", "created", "owned_calls"), [
     (
-        "/call/apify.web.scrape.job.start?actor_id=apify~hello-world", {},
-        {"data": {"id": "run-owned", "defaultDatasetId": "dataset-owned"}},
-        [
-            "/call/apify.web.scrape.job.status?run_id=run-owned",
-            "/call/apify.web.scrape.job.results?dataset_id=dataset-owned&limit=1",
-        ],
-    ),
-    (
         "/call/brightdata.web.scrape.job.start?dataset_id=gd_test", [{"url": "https://example.com"}],
         {"snapshot_id": "snapshot-owned"},
         [
@@ -796,6 +788,18 @@ async def test_legacy_platform_async_utilities_deny_unknown_ids_before_relay(
     response = await clients.get(url)
     assert response.status_code == 403
     assert response.json()["detail"]["error"] == "async_resource_not_owned"
+
+
+async def test_apify_actor_start_needs_own_key(
+    clients: AsyncClient, monkeypatch, legacy_async_platform,
+):
+    async def must_not_relay(*args, **kwargs):
+        raise AssertionError("an unmetered actor run reached treg's Apify account")
+
+    monkeypatch.setattr(call_service, "relay", must_not_relay)
+    response = await clients.post(
+        "/call/apify.web.scrape.job.start?actor_id=apify~hello-world", json={})
+    assert response.status_code == 404
 
 
 async def test_legacy_platform_async_mutation_denies_unknown_resource_before_relay(

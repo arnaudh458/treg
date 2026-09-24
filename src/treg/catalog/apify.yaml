@@ -175,6 +175,7 @@ endpoints:
       bodyType: json
       note: "the whole request body IS the actor's input object — there is no wrapper key; use the same fields as the run-sync entries above (startUrls/resultsLimit for the Facebook actor, search/limit for the TikTok one). Returns immediately with {data: {id, status, defaultDatasetId}}. This is the route for anything that outruns run-sync's 300-second ceiling: keep `id` to poll and `defaultDatasetId` to collect results. The test_request deliberately targets apify~hello-world rather than a data actor — REPLAYING IT STARTS A REAL RUN, and hello-world is the cheapest actor that exists (observed 2026-07-31: $0.00013 of compute, no results, so nothing pay-per-result can bill). Verified live 2026-07-31 that /actors/{id}/runs and the older /acts/{id}/runs are the same endpoint — both answer 201"
     cost: {type: free, value: 0, currency: USD, unit: call, note: starting a run costs nothing; the run itself bills per result or per compute unit according to the actor's pricing}
+    platform_blocked: "Runs any actor the caller names and bills per that actor's own pricing, which a free catalog price cannot meter; connect your own Apify key."
     test_request:
       pathParams: {actor_id: "apify~hello-world"}
       queryParams: {waitForFinish: 0, timeout: 60, memory: 256, maxTotalChargeUsd: 0.05}
