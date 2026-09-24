@@ -73,11 +73,10 @@ Point your client at `{BASE}/mcp/` with `Authorization: Bearer <token>`. Tools: 
 
 Tokens come in two kinds and the difference will cost you an afternoon:
 
-- **Org-scoped** (`treg org agent-new <name>`) — belongs to one team, works on its own
-  (as `X-Treg-Token` on REST, or `Authorization: Bearer` for MCP).
-  **Use this in a product.**
+- **Org-scoped** (`treg org agent-new <name>`) — belongs to one team, needs no `X-Treg-Org`:
+  send it as `X-Treg-Token` (REST) or `Authorization: Bearer` (MCP). **Use this in a product.**
 - **Identity** (`treg login`) — belongs to a *person*, who may be in several teams. Recent versions
-  pin it to the active team so it also works bare; an older or unpinned one answers
+  pin it to the active team so it also works without `X-Treg-Org`; an older or unpinned one answers
   `400 choose an org (send X-Treg-Org)`. If you see that, either send `X-Treg-Org: <slug>` or mint an
   org-scoped token instead.
 

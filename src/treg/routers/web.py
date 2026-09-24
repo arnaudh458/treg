@@ -2320,7 +2320,7 @@ async def tools_provider(service: str, db: AsyncSession = Depends(get_session),
         f"<code>{_esc_html(base)}/mcp</code> (HTTP transport).</p></div>"
         f'<div class="card"><h4>CLI</h4><p><code>curl -fsSL {_esc_html(base)}/install.sh | sh</code></p></div>'
         '<div class="card"><h4>Plain HTTP</h4><p>LangChain, CrewAI or any code: '
-        "<code>/call/&lt;tool-id&gt;</code> with your token in the <code>X-Treg-Token</code> header. No SDK.</p></div>"
+        "<code>/call/&lt;tool-id&gt;</code> + <code>X-Treg-Token: &lt;token&gt;</code>. No SDK.</p></div>"
         "</div></div></section>")
 
     prompt = (f"Using treg, {task_lines[0]}. Show me the price first." if task_lines
@@ -2713,8 +2713,8 @@ _DOCS_INTRO = """
 response. treg injects the credential server-side and relays the answer verbatim. Nothing here
 models a provider's API, which is why an upstream change does not break us and why the caller never
 holds a secret.</p>
-<pre class="call">curl -H "X-Treg-Token: $TREG_TOKEN" \\
-  "{BASE}/call/moz.web.url.metrics"</pre>
+<pre class="call">curl -X POST -H "X-Treg-Token: $TREG_TOKEN" -H "content-type: application/json" \\
+  -d '{"targets":["moz.com"]}' "{BASE}/call/moz.web.url.metrics"</pre>
 <p>Prefix any catalogued endpoint id with <code>/call/</code>. If your team has its own key for that
 provider, treg uses it and the call is <b>not metered</b>; otherwise eligible endpoints are served on
 treg's key and metered against your prepaid balance at the provider's own rate.</p>
@@ -2733,11 +2733,10 @@ endpoint is at <code>{BASE}/mcp</code>. An interactive console for everything be
 <a href="/docs/api">/docs/api</a>.</p>
 
 <h2>Endpoints</h2>
-<p>Authenticated requests carry the token in the <code>X-Treg-Token</code> header.
-Only the MCP endpoint accepts <code>Authorization: Bearer &lt;token&gt;</code>. The REST routes never
-authenticate with it (a request carrying only Bearer gets <code>401 not authenticated</code>), and on
-<code>/call/</code> it is forwarded to the provider like any other header, so never put your treg token
-there. The catalog routes are open and need no token.</p>
+<p>Authenticated requests carry <code>X-Treg-Token: &lt;token&gt;</code>. <code>Authorization: Bearer</code>
+authenticates only the MCP endpoint; REST ignores it (<code>401 not authenticated</code>), and
+<code>/call/</code> relays it to the provider like any other header, so never put your treg token there.
+The catalog routes need no token.</p>
 """
 
 

@@ -15,7 +15,7 @@ from .domain.identity import session as sess
 
 
 # The pre-treg.to hostnames must keep answering the API forever — every installed CLI, skill.md
-# and .mcp.json in the wild points here with a token header, and most HTTP clients STRIP the
+# and .mcp.json in the wild points here with a Bearer token, and most HTTP clients STRIP the
 # Authorization header when a redirect crosses hosts (and some MCP clients follow no redirects at
 # all). So only browser-facing marketing pages redirect to the canonical host; everything else —
 # /call/, /mcp/, auth flows, webhooks, agent-fetched pages like /vendor-listing, install scripts
