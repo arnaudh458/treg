@@ -2483,6 +2483,39 @@ TAVILY = OAuthProvider(
     probe_path="/usage",
 )
 
+SERPER = OAuthProvider(
+    service="serper",
+    display_name="Serper",
+    auth_kind="key",
+    token_label="API key",
+    token_placeholder="your Serper API key",
+    token_header="X-API-KEY",
+    token_format="{secret}",
+    setup_url="https://serper.dev/api-keys",
+    setup_action_label="Get your Serper API key",
+    setup_steps=(
+        "Sign in to Serper and open API keys.",
+        "Create or copy an API key and paste it here.",
+    ),
+    setup_note=(
+        "Search calls spend Serper credits. treg checks the free Account endpoint when you "
+        "connect the key; the separate Webpage tool uses the same key on Serper's scrape host."
+    ),
+    auth_uri="", token_uri="", scopes={},
+    client_id_setting="", client_secret_setting="",
+    category="SEO",
+    summary="Search Google result verticals and extract a web page as text or Markdown.",
+    base_url="https://google.serper.dev",
+    catalog_targets=(
+        CatalogTarget(host="scrape.serper.dev", base_url="https://scrape.serper.dev"),
+    ),
+    extra_tools=(
+        {"suffix": "scrape", "base_url": "https://scrape.serper.dev"},
+    ),
+    docs_url="https://serper.dev/playground",
+    probe_path="/account",
+)
+
 KEENABLE = OAuthProvider(
     service="keenable",
     display_name="Keenable",
@@ -3530,7 +3563,7 @@ REGISTRY: dict[str, OAuthProvider] = {
         SCRAPECREATORS,
         # SEO API-key providers
         DATAFORSEO, SERANKING, MOZ, MAJESTIC, SERPSTAT, EXA, TAVILY, KEENABLE, OLOSTEP,
-        SCRAPEGRAPHAI, CLORO,
+        SCRAPEGRAPHAI, SERPER, CLORO,
         # more Enrichment API-key providers
         LUSHA, CORESIGNAL, DIFFBOT, THECOMPANIESAPI, LEADMAGIC, FIBER_AI, CRUSTDATA, AVIATO,
         COMPANYENRICH, OCEANIO, ADYNTEL, TOMBA, TRESTLEIQ, PREDICTLEADS, FINDYMAIL, BRANDDEV, ICYPEAS, LEADSFORGE,

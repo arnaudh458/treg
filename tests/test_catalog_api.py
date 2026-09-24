@@ -69,6 +69,36 @@ def test_tavily_surface_keeps_only_safe_synchronous_data_tools():
     ))
 
 
+def test_serper_surface_is_live_verified_bounded_and_platform_safe():
+    cat = cs.load(refresh=True)
+    rows = {ep["id"]: ep for ep in cat.for_provider("serper")}
+    assert set(rows) == {
+        "serper.web.search", "serper.web.extract",
+        "serper.google.serp.images", "serper.google.serp.videos",
+        "serper.google.serp.places", "serper.google.serp.news",
+        "serper.google.serp.shopping", "serper.google.serp.scholar",
+        "serper.google.serp.patents", "serper.google.serp.autocomplete",
+        "serper.google.serp.maps", "serper.google.serp.reviews",
+        "serper.google.serp.lens",
+    }
+    assert all(ep["scope"] == "any_account" and ep["body_allowlist"] for ep in rows.values())
+    assert all(ep["verified"] == "2026-09-24" and ep["example_file"] for ep in rows.values())
+    assert all(cat.platform_eligible(ep) for ep in rows.values())
+    assert all(ep["cost"]["reported_charge"] == {"path": "credits", "unit": "credit"}
+               for ep in rows.values())
+    assert not any("product-reviews" in eid or "search-full" in eid or "bing" in eid for eid in rows)
+    assert rows["serper.web.extract"]["host"] == "scrape.serper.dev"
+    assert cat.credit_rates["serper"] == 0.001
+    shown = {eid: cat.cost_view(ep["cost"], "serper") for eid, ep in rows.items()}
+    assert shown["serper.web.search"]["usd"] == 0.001
+    assert shown["serper.google.serp.images"]["usd_min"] == 0.001
+    assert shown["serper.google.serp.images"]["usd"] == 0.002
+    assert shown["serper.google.serp.shopping"]["usd"] == 0.002
+    assert shown["serper.google.serp.maps"]["usd"] == 0.003
+    assert shown["serper.google.serp.lens"]["usd"] == 0.003
+    assert shown["serper.web.extract"]["usd"] == 0.01
+
+
 def test_olostep_surface_is_bounded_byok_and_platform_safe():
     cat = cs.load(refresh=True)
     rows = {ep["id"]: ep for ep in cat.for_provider("olostep")}

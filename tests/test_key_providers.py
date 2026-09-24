@@ -33,7 +33,7 @@ def test_key_providers_are_offerable_without_deployment_credentials():
                 "spyfu", "apify", "meta-ad-library", "serpapi", "adyntel",
                 "coingecko", "polygon", "finnhub", "twelvedata", "fmp", "eodhd", "marketstack",
                 "tiingo", "financialdatasets", "tinyfish", "keenable", "olostep",
-                "scrapegraphai"):
+                "scrapegraphai", "serper"):
         p = P.get(svc)
         assert p is not None, svc
         assert p.auth_kind == "key", svc
@@ -118,6 +118,31 @@ def test_key_providers_appear_in_the_marketplace_listing():
     assert listing["replicate"]["base_url"] == "https://api.replicate.com/v1"
     assert "Enrichment" in P.CATEGORY_ORDER
     assert "Market data" in P.CATEGORY_ORDER
+
+
+def test_serper_registry_uses_free_account_probe_and_scopes_the_scrape_host(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_SERPER", "PLATFORM-SERPER")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "serper")
+    settings = Settings(_env_file=None)
+    provider = P.get("serper")
+    assert provider is not None
+    assert provider.base_url == "https://google.serper.dev"
+    assert provider.probe_path == "/account"
+    assert provider.probe_method == "GET"
+    assert [(target.host, target.base_url) for target in provider.catalog_targets] == [
+        ("scrape.serper.dev", "https://scrape.serper.dev"),
+    ]
+    assert provider.extra_tools == (
+        {"suffix": "scrape", "base_url": "https://scrape.serper.dev"},
+    )
+    assert settings.platform_key_for("serper") == "PLATFORM-SERPER"
+    assert P.platform_bindings(provider) == [{
+        "platform_setting": "platform_key_serper",
+        "injector": "env",
+        "location": "header",
+        "name": "X-API-KEY",
+        "format": "{secret}",
+    }]
 
 
 def test_paid_key_verification_probe_is_typed_and_unique():

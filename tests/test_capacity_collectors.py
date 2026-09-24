@@ -120,6 +120,36 @@ async def test_tavily_capacity_uses_key_credit_remainder_and_conservative_rate()
     assert capacity.rate_limit == {"limit": 100, "window_s": 60, "source": "docs"}
 
 
+async def test_serper_capacity_uses_free_account_balance_and_live_rate():
+    def probe(request):
+        assert request.method == "GET"
+        assert request.url == "https://google.serper.dev/account"
+        assert request.headers["x-api-key"] == "test"
+        return httpx.Response(200, json={"balance": 2476, "rateLimit": 50})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+        row = await collectors._serper(client, "test")
+    assert row == {
+        "value": 2476.0,
+        "unit": "credits",
+        "note": "account rate limit 50 queries/s",
+    }
+    capacity = policy.default_policy("serper", has_key=True)
+    assert capacity.capacity_type == "credits"
+    assert capacity.funding_mode == "auto_recharge"
+    assert capacity.auto_funding_enabled is True
+    assert capacity.source == "api"
+    assert capacity.rate_limit == {"limit": 50, "window_s": 1, "source": "api"}
+
+
+@pytest.mark.parametrize("balance", [None, True, "bad", "NaN", "Infinity", -1])
+async def test_serper_capacity_rejects_invalid_balance(balance):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"balance": balance, "rateLimit": 5}))) as client:
+        with pytest.raises(ValueError, match="invalid balance"):
+            await collectors._serper(client, "test")
+
+
 async def test_tavily_capacity_uses_account_pool_when_key_has_no_limit():
     payload = {
         "key": {"usage": 0, "limit": None},

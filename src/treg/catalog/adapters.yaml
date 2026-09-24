@@ -2682,6 +2682,12 @@ adapters:
     const: {body.format: markdown, body.allowedTypes: [text/html]}
     out: {results: results, count: "len(results)"}
     miss: "coalesce(results, []) == []"
+  serper.web.search:
+    accepts: [[q]]
+    in: {q: body.q}
+    in_expr: {body.gl: "lower(country)", body.hl: language}
+    out: {results: organic, count: "len(organic)"}
+    miss: "coalesce(organic, []) == []"
 
   tinyfish.web.fetch:
     accepts: [[url]]
@@ -2723,6 +2729,12 @@ adapters:
     const: {queryParams.live: false}
     out: {pages: "list(.)", count: "len(list(.))"}
     miss: ". == null"
+  serper.web.extract:
+    accepts: [[url]]
+    in: {url: body.url}
+    const: {body.includeMarkdown: true}
+    out: {pages: "list(.)", count: "len(list(.))"}
+    miss: "coalesce(text, '') == ''"
 
   anyapi.web.map:
     accepts: [[url], [url, q]]

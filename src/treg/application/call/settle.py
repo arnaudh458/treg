@@ -335,7 +335,6 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
       - fiber-ai: REPORTED in credits, `chargeInfo.creditsCharged` on every envelope, honoured
         for `method: charged-now` only (a poll repeats its job's charge). Error bodies carry no
         `chargeInfo`, which is what keeps a 400/404 on a `per_call` profile fetch unbilled.
-
     Everyone else settles at the estimate. This is the same signal the catalog's `observed_cost`
     harvests, which is what lets phase 5's drift detector compare the two numbers directly."""
     provider = mk.provider
@@ -393,8 +392,11 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
             try:
                 value = Decimal(str(amount))
                 if value.is_finite() and value >= 0:
-                    return int((value * 1_000_000).quantize(
-                        Decimal("1"), rounding=ROUND_HALF_UP))
+                    unit_micro = (1_000_000 if reported["unit"] == "usd"
+                                  else mk.reported_charge_unit_micro)
+                    if unit_micro > 0:
+                        return int((value * unit_micro).quantize(
+                            Decimal("1"), rounding=ROUND_HALF_UP))
             except (InvalidOperation, ValueError, OverflowError):
                 pass
         # Missing or invalid charge evidence leaves the normal miss/base rules in force.
