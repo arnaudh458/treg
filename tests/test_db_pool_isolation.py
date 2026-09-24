@@ -176,7 +176,7 @@ BACKGROUND_SITES = {
     "archive_bodies.py:_db_fallback": "archive._store/_touch",
     "archive.py:prune_once": "archive.prune_worker",
     "archive.py:refresh_once": "archive.refresh_worker",
-    "routers/admin.py:_purge_expired_error_evidence": "admin evidence sweep",
+    "routers/admin.py:purge_expired_error_evidence": "admin evidence sweep",
 }
 
 

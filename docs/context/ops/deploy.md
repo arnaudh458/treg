@@ -341,6 +341,9 @@ without importing the heavy database stack into the light `treg` CLI.
 - `treg-worker arena insights` folds new audit rows into the rolling Arena aggregate
   (`--max-seconds`, default 110, bounds one pass; schedule it every two minutes).
 - `treg-worker catalog stats` folds new audit rows into per-endpoint, per-day reliability buckets
+- `treg-worker admin purge-evidence` blanks expired error evidence past the 14-day retention window
+  (`--batch-size`, default 5000, rows per transaction; schedule it daily). Replaces the side-effect
+  that previously ran on `GET /admin/errors` — a GET should not modify data.
 - `treg-worker jev xboost` runs the `/jev` launch-radar demo once a day: it calls treg's own `/call/` API
   with `TREG_JEV_TREG_TOKEN` (a member token of the demo team, so the spend is an ordinary bill) and jev
   through the Vercel AI Gateway (`TREG_AI_GATEWAY_API_KEY`), and stores the run under Ephemeral for the page.

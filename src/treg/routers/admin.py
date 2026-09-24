@@ -201,13 +201,9 @@ async def admin_errors(
     Superadmin-only and deliberately not mirrored on `/calls`: the rows hold customers' request
     content, so v1 keeps them behind the same door as every other cross-tenant view.
 
-    Ageing happens HERE rather than on the request path. There is no scheduler in this app by design
-    (see the comment above `_claim_idempotent`), and the obvious lazy hook — a marker written on the
-    request session — cannot work: `get_admin_session` never commits, so the marker would roll back and the
-    purge would then run on every single failed call. Doing it on this route costs one UPDATE to the
-    person who came to read errors, which is exactly who wants the stale ones gone.
+    Retention cleanup is handled by `treg-worker admin purge-evidence`, scheduled as a cron job.
+    A GET should never modify data.
     """
-    purged = await _purge_expired_error_evidence()
     since = _utcnow_naive() - timedelta(days=max(1, min(days, 90)))
     q = (select(CallRecord)
          .where(CallRecord.created_at >= since,
@@ -225,7 +221,6 @@ async def admin_errors(
         select(Org).where(Org.id.in_({c.org_id for c in rows if c.org_id is not None})))).scalars().all()}
     return {
         "since": since.isoformat(), "days": days, "retention_days": _ERROR_EVIDENCE_TTL_DAYS,
-        "expired_rows_purged": purged,
         "errors": [{
             "id": c.id, "call_ref": c.call_ref, "at": c.created_at.isoformat(),
             "org": omap[c.org_id].slug if c.org_id in omap else None,
@@ -245,44 +240,55 @@ async def admin_errors(
     }
 
 
-_purge_lock = asyncio.Lock()
-
-
-async def _purge_expired_error_evidence() -> int:
-    """Blank the evidence columns past the retention window; returns how many rows were cleared.
+async def purge_expired_error_evidence(batch_size: int = 5000) -> dict:
+    """Blank the evidence columns past the retention window; returns purge statistics.
 
     An UPDATE, not a DELETE: `callrecord` is the audit trail and the rest of the row must survive.
     The sentinel rather than NULL keeps "captured, then aged out" distinguishable from "never
     captured" — without it an old failure and a successful call look identical. Runs on its own
-    session because the request's session is not committed for us, and on the BACKGROUND pool
-    rather than admin's: it is a retention sweep nobody is reading, and nesting a second admin
-    session inside an admin request would hold two of that pool's few slots at once.
+    session on the BACKGROUND pool rather than admin's.
 
-    Single-flighted: the sweep is idempotent and driven by whoever happens to open the errors page,
-    so N concurrent readers would otherwise run N identical bulk UPDATEs and hold N background
-    slots. One at a time makes it one entry in `db.BACKGROUND_CONSUMERS` instead of `admin`'s size.
+    Batched: processes up to `batch_size` rows per transaction to avoid holding locks for too long.
+    Returns a dict with total purged count and whether more rows may remain.
+
+    Called by `treg-worker admin purge-evidence`, scheduled as a cron job. Never called on the
+    request path (a GET should not modify data).
     """
     cutoff = _utcnow_naive() - timedelta(days=_ERROR_EVIDENCE_TTL_DAYS)
-    try:
-        async with _purge_lock, background_session_maker() as db:
-            result = await db.execute(
-                update(CallRecord)
-                # `coalesce`, not a bare `!=`: SQL three-valued logic makes `error_response !=
-                # '<expired>'` UNKNOWN when that column is NULL, so a row carrying request-only
-                # evidence would never age out — excluded by the very predicate meant only to skip
-                # rows already purged.
-                .where(CallRecord.created_at < cutoff,
-                       or_(CallRecord.error_request.is_not(None),
-                           CallRecord.error_response.is_not(None)),
-                       or_(func.coalesce(CallRecord.error_request, "") != _ERROR_EVIDENCE_EXPIRED,
-                           func.coalesce(CallRecord.error_response, "") != _ERROR_EVIDENCE_EXPIRED))
-                .values(error_request=_ERROR_EVIDENCE_EXPIRED,
-                        error_response=_ERROR_EVIDENCE_EXPIRED))
-            await db.commit()
-            return int(result.rowcount or 0)
-    except Exception as exc:  # noqa: BLE001 — retention housekeeping must not break the view
-        logging.getLogger("treg").warning("error-evidence purge failed: %s", exc)
-        return 0
+    total_purged = 0
+    batches = 0
+    more_rows = True
+
+    while more_rows:
+        try:
+            async with background_session_maker() as db:
+                result = await db.execute(
+                    update(CallRecord)
+                    # `coalesce`, not a bare `!=`: SQL three-valued logic makes `error_response !=
+                    # '<expired>'` UNKNOWN when that column is NULL, so a row carrying request-only
+                    # evidence would never age out — excluded by the very predicate meant only to skip
+                    # rows already purged.
+                    .where(CallRecord.created_at < cutoff,
+                           or_(CallRecord.error_request.is_not(None),
+                               CallRecord.error_response.is_not(None)),
+                           or_(func.coalesce(CallRecord.error_request, "") != _ERROR_EVIDENCE_EXPIRED,
+                               func.coalesce(CallRecord.error_response, "") != _ERROR_EVIDENCE_EXPIRED))
+                    .values(error_request=_ERROR_EVIDENCE_EXPIRED,
+                            error_response=_ERROR_EVIDENCE_EXPIRED)
+                    .execution_options(synchronize_session=False)
+                )
+                await db.commit()
+                batch_count = int(result.rowcount or 0)
+                total_purged += batch_count
+                batches += 1
+                more_rows = batch_count >= batch_size
+                if batch_count < batch_size:
+                    break
+        except Exception as exc:  # noqa: BLE001 — retention housekeeping must not crash the worker
+            logging.getLogger("treg").warning("error-evidence purge failed: %s", exc)
+            return {"purged": total_purged, "batches": batches, "error": str(exc)}
+
+    return {"purged": total_purged, "batches": batches, "error": None}
 
 
 @app.get("/admin/health")

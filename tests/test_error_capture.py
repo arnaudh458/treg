@@ -509,6 +509,7 @@ async def test_expired_evidence_is_a_state_not_content(clients: AsyncClient, pla
         row.created_at = row.created_at - timedelta(days=admin_routes._ERROR_EVIDENCE_TTL_DAYS + 1)
         db.add(row)
         await db.commit()
+    await admin_routes.purge_expired_error_evidence()
     d = (await clients.get("/admin/errors?days=30", headers=ADMIN)).json()
     aged = [e for e in d["errors"] if e["expired"]]
     assert aged, "the row is still listed as a failure"
@@ -664,9 +665,73 @@ async def test_evidence_ages_out_but_the_audit_row_survives(clients: AsyncClient
         await db.commit()
         call_id, status = row.id, row.status_code
 
-    assert (await clients.get("/admin/errors", headers=ADMIN)).json()["expired_rows_purged"] == 1
+    result = await admin_routes.purge_expired_error_evidence()
+    assert result["purged"] == 1, "retention worker should blank one row"
+    assert result["error"] is None
     async with session_maker() as db:
         aged = await db.get(CallRecord, call_id)
         assert aged.error_response == admin_routes._ERROR_EVIDENCE_EXPIRED, "aged out, not silently NULL"
         assert aged.status_code == status, "the rest of the audit row is untouched"
         assert aged.endpoint_id == EP
+
+
+async def test_admin_errors_is_side_effect_free(clients: AsyncClient, platform_on, monkeypatch):
+    """GET /admin/errors must not modify data — it's a read endpoint. Retention cleanup is now
+    handled by `treg-worker admin purge-evidence`, scheduled as a cron job."""
+    monkeypatch.setattr(call_service, "relay", _fake_relay(400, b'{"error":"stale failure"}'))
+    await clients.get(f"/call/{EP}?aweme_id=bad")
+    from treg import audit
+    await audit.drain()
+
+    async with session_maker() as db:
+        row = (await db.execute(
+            select(CallRecord).order_by(CallRecord.id.desc()).limit(1))).scalars().first()
+        row.created_at = row.created_at - timedelta(days=admin_routes._ERROR_EVIDENCE_TTL_DAYS + 1)
+        original_response = row.error_response
+        db.add(row)
+        await db.commit()
+        call_id = row.id
+
+    d = (await clients.get("/admin/errors?days=30", headers=ADMIN)).json()
+    assert "expired_rows_purged" not in d, "GET should not report purging"
+    async with session_maker() as db:
+        row = await db.get(CallRecord, call_id)
+        assert row.error_response == original_response, "GET should not modify data"
+
+
+def test_worker_cli_parses_admin_purge_evidence_command(monkeypatch):
+    """The worker CLI should parse the admin purge-evidence command and call the function."""
+    from treg import worker
+    seen = {}
+
+    async def fake(args):
+        seen["batch_size"] = args.batch_size
+        return 0
+
+    monkeypatch.setattr(worker, "_admin_purge_evidence", fake)
+    assert worker.main(["admin", "purge-evidence"]) == 0
+    assert seen["batch_size"] == 5000
+    assert worker.main(["admin", "purge-evidence", "--batch-size", "1000"]) == 0
+    assert seen["batch_size"] == 1000
+
+
+async def test_purge_evidence_batching_handles_multiple_batches(clients: AsyncClient, platform_on, monkeypatch):
+    """The purge function should process rows in batches to avoid long-held locks."""
+    from treg import audit
+
+    monkeypatch.setattr(call_service, "relay", _fake_relay(400, b'{"error":"test failure"}'))
+    for _ in range(5):
+        await clients.get(f"/call/{EP}?aweme_id=test")
+    await audit.drain()
+
+    async with session_maker() as db:
+        rows = (await db.execute(
+            select(CallRecord).order_by(CallRecord.id.desc()).limit(5))).scalars().all()
+        for row in rows:
+            row.created_at = row.created_at - timedelta(days=admin_routes._ERROR_EVIDENCE_TTL_DAYS + 1)
+            db.add(row)
+        await db.commit()
+
+    result = await admin_routes.purge_expired_error_evidence(batch_size=2)
+    assert result["purged"] == 5
+    assert result["error"] is None
