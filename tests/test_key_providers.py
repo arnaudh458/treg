@@ -32,7 +32,8 @@ def test_key_providers_are_offerable_without_deployment_credentials():
                 "icypeas", "leadsforge", "influencersclub", "crustdata", "aviato",
                 "spyfu", "apify", "meta-ad-library", "serpapi", "adyntel",
                 "coingecko", "polygon", "finnhub", "twelvedata", "fmp", "eodhd", "marketstack",
-                "tiingo", "financialdatasets", "tinyfish", "keenable", "olostep"):
+                "tiingo", "financialdatasets", "tinyfish", "keenable", "olostep",
+                "scrapegraphai"):
         p = P.get(svc)
         assert p is not None, svc
         assert p.auth_kind == "key", svc
@@ -163,6 +164,24 @@ def test_olostep_registry_uses_free_credit_probe_and_bearer_auth(monkeypatch):
         "location": "header",
         "name": "Authorization",
         "format": "Bearer {secret}",
+    }]
+
+
+def test_scrapegraphai_registry_uses_free_credit_probe_and_sgai_header(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_SCRAPEGRAPHAI", "PLATFORM-SCRAPEGRAPHAI")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "scrapegraphai")
+    provider = P.get("scrapegraphai")
+    assert provider is not None
+    assert provider.base_url == "https://v2-api.scrapegraphai.com"
+    assert provider.probe_path == "/api/credits"
+    assert provider.probe_cost_micro == 0
+    assert Settings(_env_file=None).platform_key_for("scrapegraphai") == "PLATFORM-SCRAPEGRAPHAI"
+    assert P.platform_bindings(provider) == [{
+        "platform_setting": "platform_key_scrapegraphai",
+        "injector": "env",
+        "location": "header",
+        "name": "SGAI-APIKEY",
+        "format": "{secret}",
     }]
 
 

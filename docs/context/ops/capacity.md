@@ -83,6 +83,14 @@ top-up. A controlled `/usage` burst did not reproduce its documented 10-per-10-m
 rate policy remains documentation-derived. The funded account was not deliberately exhausted;
 432/433 signatures are documentation-derived rather than live-observed.
 
+ScrapeGraphAI's internal collector calls the free `GET /api/credits` route with the platform
+`SGAI-APIKEY`. It accepts only a finite nonnegative `remaining` credit balance and retains the plan,
+used-credit count, and crawl/monitor job quotas as informational notes. The policy is
+`credits / subscription / api`: the API balance is exact and the shared account uses subscription
+funding. Shared-key smoothing uses the configured 500 requests per minute;
+live responses supplied no usable rate-limit headers. The credits route remains internal capacity
+evidence rather than a catalog tool, and no funding automation or exhaustion signature is inferred.
+
 TrestleIQ publishes no free balance or usage API. Capacity reports the wallet as Developer
 Portal-only and does not spend a validation query to read it. The policy records cash with vendor
 auto recharge, manually verified as enabled in the portal, and a documented 10 requests/second

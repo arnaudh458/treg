@@ -138,6 +138,26 @@ async def _olostep(c, key):
             "note": f"plan {plan}; usage {state}"}
 
 
+async def _scrapegraphai(c, key):
+    d = await _get(c, "https://v2-api.scrapegraphai.com/api/credits",
+                   headers={"SGAI-APIKEY": key})
+    raw = d.get("remaining") if isinstance(d, dict) else None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) \
+            or not math.isfinite(float(raw)) or raw < 0:
+        raise ValueError("ScrapeGraphAI returned no valid remaining-credit balance")
+    jobs = d.get("jobs") if isinstance(d.get("jobs"), dict) else {}
+    crawl, monitor = jobs.get("crawl") or {}, jobs.get("monitor") or {}
+    return {
+        "value": raw,
+        "unit": "credits",
+        "note": (
+            f"plan {d.get('plan') or 'unknown'}; used {d.get('used', '?')}; "
+            f"crawl jobs {crawl.get('used', '?')}/{crawl.get('limit', '?')}; "
+            f"monitors {monitor.get('used', '?')}/{monitor.get('limit', '?')}"
+        ),
+    }
+
+
 async def _scrapecreators(c, key):
     d = await _get(c, "https://api.scrapecreators.com/v1/account/credit-balance",
                    headers={"x-api-key": key})
@@ -743,6 +763,7 @@ BALANCE_ROUTES = {
     "fishaudio": _fishaudio,
     "tavily": _tavily,
     "olostep": _olostep,
+    "scrapegraphai": _scrapegraphai,
     "scrapecreators": _scrapecreators,
     "serpapi": _serpapi,
     "moz": _moz,

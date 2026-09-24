@@ -45,6 +45,11 @@ exposing usage as a catalog tool. `TREG_PLATFORM_KEY_TAVILY` supplies the server
 existing own-key-first ladder means a team's key always wins and remains unmetered. The public
 surface is limited to Search, Extract, Map, and Crawl.
 
+ScrapeGraphAI uses a pasted raw `SGAI-APIKEY` header at `https://v2-api.scrapegraphai.com`. Its free
+internal `GET /api/credits` probe rejects invalid credentials and validates team-owned and optional
+platform credentials while also supplying capacity data. `TREG_PLATFORM_KEY_SCRAPEGRAPHAI` supplies
+the server-held fallback; the existing own-key-first ladder keeps a team's credential unmetered.
+
 `ADYNTEL` is the first pasted-key provider whose two credentials ride in the JSON request body.
 The primary `api_key` and second `email` are ordinary declarative bindings with `location: json`;
 the relay contains no Adyntel branch. Tier 4 reads `TREG_PLATFORM_KEY_ADYNTEL` and

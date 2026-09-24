@@ -2540,6 +2540,34 @@ OLOSTEP = OAuthProvider(
     probe_path="/user/credits/info",
 )
 
+SCRAPEGRAPHAI = OAuthProvider(
+    service="scrapegraphai",
+    display_name="ScrapeGraphAI",
+    auth_kind="key",
+    token_label="API key",
+    token_placeholder="sgai-…",
+    token_header="SGAI-APIKEY",
+    token_format="{secret}",
+    setup_url="https://scrapegraphai.com/dashboard",
+    setup_action_label="Get your ScrapeGraphAI API key",
+    setup_steps=(
+        "Sign in to ScrapeGraphAI and open the dashboard.",
+        "Create or copy an API key and paste it here.",
+    ),
+    setup_note=(
+        "Scrape, Extract, Search and Crawl spend API credits. treg checks the free Credits "
+        "endpoint when you connect the key."
+    ),
+    auth_uri="", token_uri="",
+    scopes={},
+    client_id_setting="", client_secret_setting="",
+    category="SEO",
+    summary="Scrape and extract pages, search the web, crawl sites, and monitor pages for changes.",
+    base_url="https://v2-api.scrapegraphai.com",
+    docs_url="https://docs.scrapegraphai.com/api-reference/introduction",
+    probe_path="/api/credits",
+)
+
 CLORO = OAuthProvider(
     service="cloro",
     display_name="cloro",
@@ -3501,7 +3529,8 @@ REGISTRY: dict[str, OAuthProvider] = {
         TIKHUB, BRIGHTDATA, SEMRUSH, JUSTONEAPI,
         SCRAPECREATORS,
         # SEO API-key providers
-        DATAFORSEO, SERANKING, MOZ, MAJESTIC, SERPSTAT, EXA, TAVILY, KEENABLE, OLOSTEP, CLORO,
+        DATAFORSEO, SERANKING, MOZ, MAJESTIC, SERPSTAT, EXA, TAVILY, KEENABLE, OLOSTEP,
+        SCRAPEGRAPHAI, CLORO,
         # more Enrichment API-key providers
         LUSHA, CORESIGNAL, DIFFBOT, THECOMPANIESAPI, LEADMAGIC, FIBER_AI, CRUSTDATA, AVIATO,
         COMPANYENRICH, OCEANIO, ADYNTEL, TOMBA, TRESTLEIQ, PREDICTLEADS, FINDYMAIL, BRANDDEV, ICYPEAS, LEADSFORGE,

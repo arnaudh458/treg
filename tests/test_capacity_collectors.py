@@ -6,12 +6,14 @@ Each test mocks the upstream API response and verifies that the collector return
 
 from __future__ import annotations
 
+import math
 from datetime import timedelta
-from treg.domain.capacity import policy, sweep
-from treg.timeutil import utcnow_naive
-from treg.domain.capacity import collectors
+
 import httpx
 import pytest
+
+from treg.domain.capacity import collectors, policy, sweep
+from treg.timeutil import utcnow_naive
 
 
 async def test_fishaudio_balance_uses_workspace_wallet(monkeypatch):
@@ -476,6 +478,53 @@ async def test_olostep_balance_and_conservative_shared_key_rate(monkeypatch):
         assert capacity.rate_limit == {"limit": 5, "window_s": 1, "source": "policy"}
     finally:
         collectors.get_settings.cache_clear()
+
+
+async def test_scrapegraphai_balance_and_shared_key_policy(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_SCRAPEGRAPHAI", "test-key")
+    collectors.get_settings.cache_clear()
+    try:
+        def probe(request):
+            assert request.method == "GET"
+            assert request.url == "https://v2-api.scrapegraphai.com/api/credits"
+            assert request.headers["SGAI-APIKEY"] == "test-key"
+            return httpx.Response(200, json={
+                "remaining": 475,
+                "used": 25,
+                "plan": "Free Plan",
+                "jobs": {
+                    "crawl": {"used": 0, "limit": 1},
+                    "monitor": {"used": 0, "limit": 1},
+                },
+            })
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+            row = await collectors.provider_balance("scrapegraphai", client)
+        assert row == {
+            "provider": "scrapegraphai",
+            "value": 475,
+            "unit": "credits",
+            "note": "plan Free Plan; used 25; crawl jobs 0/1; monitors 0/1",
+        }
+        capacity = policy.default_policy("scrapegraphai", has_key=True)
+        assert capacity.capacity_type == "credits"
+        assert capacity.funding_mode == "subscription"
+        assert capacity.source == "api"
+        assert capacity.rate_limit == {"limit": 500, "window_s": 60, "source": "policy"}
+    finally:
+        collectors.get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("remaining", [None, True, -1, "475", float("nan")])
+async def test_scrapegraphai_balance_rejects_uncertain_values(remaining):
+    def probe(_request):
+        if isinstance(remaining, float) and math.isnan(remaining):
+            return httpx.Response(200, content=b'{"remaining": NaN}')
+        return httpx.Response(200, json={"remaining": remaining})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+        with pytest.raises(ValueError, match="remaining-credit"):
+            await collectors._scrapegraphai(client, "test")
 
 
 async def test_adyntel_capacity_is_dashboard_only_and_rate_limited(monkeypatch):
