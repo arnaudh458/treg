@@ -423,8 +423,8 @@ Three human sign-in doors (email is the identity; the door just proves it):
 - **Invite code** - `treg org join <code> --email you@company.com` (creates you + joins a team).
 
 Agents/CI use a token directly: `treg login --token <token>`. A dashboard "API key" bakes in the
-team (so it needs no `X-Treg-Org` — it works as a bare bearer, including as an MCP `Authorization`
-header); a per-org token from `treg org create` / `treg org join` does too. Never share the upstream
+team, so it needs no `X-Treg-Org`: send it as `X-Treg-Token` (REST) or `Authorization: Bearer`
+(MCP); a per-org token from `treg org create` / `treg org join` does too. Never share the upstream
 key - share access.
 
 ## MCP — connect an assistant

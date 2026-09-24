@@ -2320,7 +2320,7 @@ async def tools_provider(service: str, db: AsyncSession = Depends(get_session),
         f"<code>{_esc_html(base)}/mcp</code> (HTTP transport).</p></div>"
         f'<div class="card"><h4>CLI</h4><p><code>curl -fsSL {_esc_html(base)}/install.sh | sh</code></p></div>'
         '<div class="card"><h4>Plain HTTP</h4><p>LangChain, CrewAI or any code: '
-        "<code>/call/&lt;tool-id&gt;</code> with a Bearer token. No SDK.</p></div>"
+        "<code>/call/&lt;tool-id&gt;</code> + <code>X-Treg-Token: &lt;token&gt;</code>. No SDK.</p></div>"
         "</div></div></section>")
 
     prompt = (f"Using treg, {task_lines[0]}. Show me the price first." if task_lines
@@ -2713,8 +2713,8 @@ _DOCS_INTRO = """
 response. treg injects the credential server-side and relays the answer verbatim. Nothing here
 models a provider's API, which is why an upstream change does not break us and why the caller never
 holds a secret.</p>
-<pre class="call">curl -H "Authorization: Bearer $TREG_TOKEN" \\
-  "{BASE}/call/moz.web.url.metrics"</pre>
+<pre class="call">curl -X POST -H "X-Treg-Token: $TREG_TOKEN" -H "content-type: application/json" \\
+  -d '{"targets":["moz.com"]}' "{BASE}/call/moz.web.url.metrics"</pre>
 <p>Prefix any catalogued endpoint id with <code>/call/</code>. If your team has its own key for that
 provider, treg uses it and the call is <b>not metered</b>; otherwise eligible endpoints are served on
 treg's key and metered against your prepaid balance at the provider's own rate.</p>
@@ -2733,8 +2733,10 @@ endpoint is at <code>{BASE}/mcp</code>. An interactive console for everything be
 <a href="/docs/api">/docs/api</a>.</p>
 
 <h2>Endpoints</h2>
-<p>Authenticated requests carry <code>Authorization: Bearer &lt;token&gt;</code> (or
-<code>X-Treg-Token</code>). The catalog routes are open and need no token.</p>
+<p>Authenticated requests carry <code>X-Treg-Token: &lt;token&gt;</code>. <code>Authorization: Bearer</code>
+authenticates only the MCP endpoint; REST ignores it (<code>401 not authenticated</code>), and
+<code>/call/</code> relays it to the provider like any other header, so never put your treg token there.
+The catalog routes need no token.</p>
 """
 
 
@@ -2786,7 +2788,7 @@ async def docs_page():
   real request to any of {n_endpoints} catalogued provider endpoints through <code>/call/</code>.</p>
   <div class="facts">
     <span>base <b>{_esc_html(base)}</b></span>
-    <span><b>Bearer</b> token auth</span>
+    <span><b>X-Treg-Token</b> header auth</span>
     <span><a href="/openapi.json">openapi.json</a></span>
     <span><a href="/docs/api">interactive console</a></span>
   </div>
