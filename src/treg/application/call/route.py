@@ -253,6 +253,8 @@ async def build_plan(ep: dict, identity_given: dict, caller, options: RouteOptio
     raw, dropped = candidates_for(contract, cat.for_capability(ep["capability"]), cat.adapters, identity)
     ids = [e["id"] for e, _, _ in raw]
     stats = await _observed_stats(ids)
+    supplied_variant = variant  # The contract variant the caller's input matched
+    given = frozenset(k for k, v in (identity_given or {}).items() if v not in (None, ""))
     own: set[str] = set()
     own_tools: set[str] = set()
     if ids:
@@ -292,7 +294,7 @@ async def build_plan(ep: dict, identity_given: dict, caller, options: RouteOptio
         c = Candidate(endpoint=e, adapter=ad, variant=v, tier=tier, price_micro=price, hit_rate=st.get("hit_rate"),
                       ok_rate=st.get("ok_rate"), p50_ms=st.get("p50_ms"), last_ok_days=st.get("last_ok_days"),
                       exhausted=(tier == "platform" and capacity_view.is_exhausted(e["provider"], e["id"])),
-                      ignored=ignored_filters(ad, contract, identity))
+                      ignored=ignored_filters(ad, contract, identity, adapter_variant=v, supplied_variant=supplied_variant))
         if tier == "platform" and not cat.platform_eligible(e):
             dropped.append({"endpoint_id": e["id"], "why": "not platform-eligible and no own key"})
             continue
@@ -321,8 +323,7 @@ async def build_plan(ep: dict, identity_given: dict, caller, options: RouteOptio
         cands = kept
     return Plan(contract=contract, identity=identity, variant=variant,
                 candidates=rank(cands, prefer=options.prefer, exclude=options.exclude,
-                                given={k for k, v in (identity_given or {}).items() if v not in (None, "")},
-                                derive=contract.derive), dropped=dropped)
+                                given=given, derive=contract.derive), dropped=dropped)
 
 
 def _child_input(parent, ep: dict, query: dict[str, str], body: dict,

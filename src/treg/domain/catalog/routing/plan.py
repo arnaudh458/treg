@@ -14,11 +14,36 @@ MAX_ERROR_FALLBACKS = 2
 MIN_HIT_SAMPLES = 50
 
 
-def ignored_filters(adapter: Adapter, contract: Contract, identity: dict[str, Any]) -> tuple[str, ...]:
-    """Filters the caller supplied that this adapter has no place for — the provider will answer a
-    LOOSER question than the one asked. Pure, and knowable before the call, so ranking can use it."""
+def ignored_filters(adapter: Adapter, contract: Contract, identity: dict[str, Any],
+                    adapter_variant: tuple[str, ...] | None = None,
+                    supplied_variant: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    """Filters and identity keys the caller supplied that this adapter has no place for — the provider
+    will answer a LOOSER question than the one asked. Pure, and knowable before the call, so ranking
+    can use it.
+
+    When `adapter_variant` and `supplied_variant` are provided, identity keys from the caller's
+    supplied variant that are not in the adapter's variant are also returned. A caller who matches
+    `{company_domain, title}` (the supplied variant) going to an adapter whose variant is just
+    `[title]` is asking a company-scoped question that the adapter will answer company-blind — the
+    same class of looser-answer bug as a dropped filter (live 2026-09-24: Lusha ignoring company_domain
+    returned 60 identical off-target results for different company queries, each billed at $0.1248).
+
+    This only applies to SUBSET variants: when the adapter uses `{title}` but the caller matched
+    `{company_domain, title}`, the adapter ignores `company_domain`. When the adapter uses a
+    DIFFERENT variant entirely (e.g. caller matches `{q}` but adapter uses `{title}`), those are
+    alternative identity schemes, not additional constraints being dropped.
+    """
     used = set(adapter.in_map) | {n for e in (adapter.in_expr or {}).values() for n in re.findall(r"[A-Za-z_]\w*", e)}
-    return tuple(k for k in (contract.filters or ()) if identity.get(k) not in (None, "") and k not in used)
+    ignored = [k for k in (contract.filters or ()) if identity.get(k) not in (None, "") and k not in used]
+    if adapter_variant is not None and supplied_variant is not None:
+        adapter_set = set(adapter_variant)
+        supplied_set = set(supplied_variant)
+        # Only penalize if the adapter variant is a strict subset of the supplied variant. When
+        # they're disjoint or unrelated, the adapter is using an alternative identity scheme.
+        if adapter_set < supplied_set:  # strict subset
+            for k in supplied_set - adapter_set:
+                ignored.append(k)
+    return tuple(ignored)
 
 
 def cost_at(cost_view: dict | None, request: dict | None = None, adapter: Adapter | None = None) -> int | None:
