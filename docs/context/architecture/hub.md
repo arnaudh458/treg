@@ -53,7 +53,13 @@ table served as a tool, walked by hand) is recorded at the end of this file.
 
 Everything sits behind `hub_enabled` (`TREG_HUB_ENABLED`, default off): with the flag off every
 hub route answers 404, the call road never asks the hub, the agent files carry no hub text, and
-the dashboard shows no Hub entry. The flag flips in production at the final merge.
+the dashboard shows no Hub entry. With the flag on, `TREG_HUB_TEAMS` (a comma-separated list of
+team slugs, default empty) is the middle stage between off and open (owner, 2026-09-24): every
+gate that has a caller (`hub_app.enabled_for(slug)`: the hub router, `/call/` of a hub id) answers
+404 to a team outside the list, exactly as with the flag off, while the public contract (catalog
+get, catalog search, the share page, the agent files) keeps the plain flag and stays readable. An
+empty list means every team. The flag flips in production at the final merge, with the list set
+to the owner's team first.
 
 ## Vocabulary
 

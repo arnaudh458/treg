@@ -23,7 +23,21 @@ HUB_ID_MIN_PARTS = 2
 
 
 def enabled() -> bool:
+    """The plain flag: the hub exists on this registry. Pages with no caller (the share page, the
+    agent-facing files) use this one."""
     return bool(get_settings().hub_enabled)
+
+
+def enabled_for(org_slug: str | None) -> bool:
+    """The hub exists AND this team may use it: the flag, then `TREG_HUB_TEAMS` when it is set
+    (empty = every team). Every gate that has a caller uses this one, so a team outside the list
+    sees exactly what it sees with the flag off: 404 on the routes, no hub rows in search, the
+    hub ids unknown on /call/ and in MCP."""
+    s = get_settings()
+    if not s.hub_enabled:
+        return False
+    teams = s.hub_team_set
+    return not teams or (org_slug or "").lower() in teams
 
 
 def is_hub_id_shape(rest: str) -> bool:
@@ -50,11 +64,13 @@ OLD_VERSION_DAYS = 30   # a pinned old version stays callable this long after a 
 
 
 async def tool_for(db: AsyncSession, rest: str, *, live_only: bool = True,
-                   caller_org_id: int | None = None) -> HubTool | None:
+                   caller_org_id: int | None = None, caller_slug: str | None = None) -> HubTool | None:
     """The version that serves `rest`: the newest `live` one, or `@N` pinned. A pinned version may
     also be the one UNDER CHECK (the check run pins it: HUB-DECISIONS round 2 q10), and a pinned
     old version stays callable for OLD_VERSION_DAYS after a newer live one exists (round 4 q8)."""
-    if not enabled() or not is_hub_id_shape(rest):
+    # The public views (catalog get, the share page) pass no caller and get the plain flag: a
+    # contract is readable. A CALL names its caller's team and goes through the allow-list.
+    if not (enabled_for(caller_slug) if caller_slug is not None else enabled()) or not is_hub_id_shape(rest):
         return None
     tool_id, pin = split_id(rest)
     if pin is None:

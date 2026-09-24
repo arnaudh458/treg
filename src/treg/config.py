@@ -379,6 +379,11 @@ class Settings(BaseSettings):
     # default so every merge along the way changes nothing users see; production flips it once
     # the whole hub has landed on main.
     hub_enabled: bool = False
+    # With the hub on, a comma-separated list of team slugs that may use it; EMPTY means every
+    # team. The middle stage between "off" and "open": the owner's own team tries the live hub on
+    # production first (decided 2026-09-24). Pages that have no caller (the share page, the
+    # agent-facing files) follow the plain flag: they describe the hub, they do not run it.
+    hub_teams: str = ""
 
     # Additive Claude directory MCP. Default OFF so deploying code cannot publish a new connector
     # surface before its production Inspector and custom-connector gates have passed.
@@ -547,6 +552,11 @@ class Settings(BaseSettings):
     def platform_provider_set(self) -> frozenset[str]:
         """The allow-listed tier-4 providers (comma-separated `TREG_PLATFORM_PROVIDERS`)."""
         return frozenset(p.strip().lower() for p in self.platform_providers.split(",") if p.strip())
+
+    @property
+    def hub_team_set(self) -> frozenset[str]:
+        """`hub_teams` parsed: lower-cased slugs, empty means no restriction."""
+        return frozenset(p.strip().lower() for p in self.hub_teams.split(",") if p.strip())
 
     def platform_provider_enabled(self, provider: str) -> bool:
         """Whether this deployment allows a catalog fallback for `provider`.

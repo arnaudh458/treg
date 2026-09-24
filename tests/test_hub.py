@@ -1110,3 +1110,44 @@ async def test_a_script_sees_what_each_call_cost(clients: AsyncClient, hub_on, p
     run = await clients.post(f"/call/{r.json()['tool_id']}", json={}, headers={"X-Treg-Token": token})
     assert run.status_code == 200, run.text
     assert run.json()["output"]["rows"] == [0.001, 0]        # the step's $0.001, and no x-treg header
+
+
+# ---------------------------------------------------------------------------------------------
+# TREG_HUB_TEAMS: the middle stage between off and open (owner, 2026-09-24)
+
+def test_enabled_for_is_the_flag_then_the_team_list(monkeypatch):
+    from treg.application import hub as hub_app
+    monkeypatch.setenv("TREG_HUB_ENABLED", "1"); monkeypatch.setenv("TREG_HUB_TEAMS", "treg-hub, Acme")
+    get_settings.cache_clear()
+    assert hub_app.enabled() is True
+    assert hub_app.enabled_for("treg-hub") and hub_app.enabled_for("acme") and hub_app.enabled_for("ACME")
+    assert not hub_app.enabled_for("someone-else") and not hub_app.enabled_for(None)
+    monkeypatch.setenv("TREG_HUB_TEAMS", "")
+    get_settings.cache_clear()
+    assert hub_app.enabled_for("someone-else"), "an empty list means every team"
+    monkeypatch.setenv("TREG_HUB_ENABLED", "0"); monkeypatch.setenv("TREG_HUB_TEAMS", "treg-hub")
+    get_settings.cache_clear()
+    assert not hub_app.enabled_for("treg-hub"), "the flag off wins over the list"
+    get_settings.cache_clear()
+
+
+async def test_a_team_outside_the_list_sees_the_hub_as_off_but_can_read_a_contract(clients: AsyncClient, hub_on, monkeypatch):
+    """The listed team publishes and runs; a second team gets 404 on every hub route and on
+    /call/ of the tool, exactly as with the flag off. The public contract (catalog get, the share
+    page) stays readable: it describes the hub, it does not run it."""
+    tool_id = await _publish_live(clients)                  # the test client's team is the maker
+    me = (await clients.get("/orgs")).json()[0]["slug"]
+    other = (await funded_user(clients, "outsider@example.com"))["token"]
+    monkeypatch.setenv("TREG_HUB_TEAMS", me)
+    get_settings.cache_clear()
+    try:
+        assert (await clients.get("/hub/tools/mine")).status_code == 200
+        r = await clients.get("/hub/tools/mine", headers={"X-Treg-Token": other})
+        assert r.status_code == 404, r.text
+        r = await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers={"X-Treg-Token": other})
+        assert r.status_code == 404, r.text                    # the id is unknown to that team
+        assert (await clients.get(f"/catalog/endpoints/{tool_id}")).status_code == 200
+        assert (await clients.get(f"/hub/{tool_id}")).status_code == 200
+    finally:
+        monkeypatch.delenv("TREG_HUB_TEAMS", raising=False)
+        get_settings.cache_clear()

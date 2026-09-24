@@ -28,8 +28,10 @@ from ..models import HubTool
 app = APIRouter()
 
 
-def _require_hub() -> None:
-    if not hub_app.enabled():
+def _require_hub(caller: Caller | None = None) -> None:
+    """404 when the hub is off, or on but not for this caller's team (`TREG_HUB_TEAMS`): a team
+    outside the list sees exactly what it sees with the flag off."""
+    if not hub_app.enabled_for(caller.org.slug if caller is not None else None):
         raise HTTPException(status_code=404, detail="Not Found")
 
 
@@ -47,7 +49,7 @@ class PublishIn(BaseModel):
 
 async def _publish(body: PublishIn, request: Request, caller: Caller, db: AsyncSession,
                    *, must_exist: bool) -> dict:
-    _require_hub()
+    _require_hub(caller)
     _require_can_register(caller)
     if must_exist:
         name = body.manifest.get("name") if isinstance(body.manifest, dict) else None
@@ -114,7 +116,7 @@ async def my_hub_tools(
 ) -> list[dict]:
     """Every version of the team's tools, newest first, each with its derived health and the
     tool's last-30-day numbers (runs by others, earned) so the dashboard list needs one call."""
-    _require_hub()
+    _require_hub(caller)
     from datetime import timedelta
     from sqlalchemy import func
     from ..application.hub import health as hub_health
@@ -145,7 +147,7 @@ async def hub_run(
     output. The MAKER's team sees the run of its tool: inputs (secret inputs masked), the trace,
     the script's log lines and the failure's error body, never the caller's identity or the
     output (docs/HUB-DECISIONS.md round 2 q7, round 5 q8, q10). Anyone else: 404."""
-    _require_hub()
+    _require_hub(caller)
     from ..application.hub import health as hub_health
     from ..models import HubRun
     row = (await db.execute(select(HubRun).where(HubRun.run_id == run_id))).scalars().first()
@@ -189,7 +191,7 @@ async def get_hub_tool(
 ) -> dict:
     """One version, the newest unless the id carries `@N`. Any status: the maker sees their own
     unchecked and failed versions; other teams see only live ones (the public page is phase 7)."""
-    _require_hub()
+    _require_hub(caller)
     base, pin = hub_app.split_id(tool_id)
     q = select(HubTool).where(HubTool.tool_id == base)
     if pin is not None:
@@ -224,7 +226,7 @@ async def run_hub_folder(
     body: RunIn, request: Request, caller: Caller = Depends(require_member),
     db: AsyncSession = Depends(get_session),
 ) -> Response:
-    _require_hub()
+    _require_hub(caller)
     _require_can_register(caller)
     from ..application.call.service import create_call_context, execute_call
     from ..application.call.types import CallFailure, CallInput, CallerSnapshot
@@ -284,7 +286,7 @@ async def hub_tool_earnings(
     """The seller's view (docs/HUB-DECISIONS.md round 3 q10, round 5 q9): per day, runs,
     successes, failures and what was earned, for one of the team's tools. Counts and amounts only;
     never who called. `format=csv` for a download."""
-    _require_hub()
+    _require_hub(caller)
     from datetime import timedelta
     from sqlalchemy import func
     from ..models import HubRun
@@ -335,7 +337,7 @@ async def retire_hub_tool(
 ) -> dict:
     """Retire every version of one of your team's tools: off the call road at once, the rows kept
     (earnings and run history stay readable)."""
-    _require_hub()
+    _require_hub(caller)
     _require_can_register(caller)
     base, _ = hub_app.split_id(tool_id)
     n = await hub_app.retire(db, org_id=caller.org_id, tool_id=base)
@@ -361,7 +363,7 @@ async def set_hub_tool_price(
 ) -> dict:
     """Change the seller's price and/or the listing switches of the newest live version; applies
     to later runs, no version bump. The reply carries exactly the fields that were set."""
-    _require_hub()
+    _require_hub(caller)
     _require_can_register(caller)
     if body.price_usd is None and body.listed is None and body.public_log is None:
         raise HTTPException(status_code=422, detail={"error": "manifest_invalid", "field": "body",
@@ -394,7 +396,7 @@ async def hub_tool_health(
     tool_id: str, caller: Caller = Depends(require_member), db: AsyncSession = Depends(get_session),
 ) -> dict:
     """The maker's health view: the derived state, the last check, and the last runs."""
-    _require_hub()
+    _require_hub(caller)
     from ..application.hub import health as hub_health
     from ..models import HubRun
     base, pin = hub_app.split_id(tool_id)
