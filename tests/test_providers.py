@@ -57,7 +57,7 @@ def test_moltsets_env_key_is_detected_as_bearer(tmp_path):
     assert detected.required_headers == {"User-Agent": "treg/1.0 (+https://treg.to)"}
     [action] = prov.plan_actions([detected])
     assert action.required_headers == {"User-Agent": "treg/1.0 (+https://treg.to)"}
-    assert prov.CATALOG_VERSION == 20
+    assert prov.CATALOG_VERSION == 21
 
 
 def test_limadata_env_key_is_detected_as_x_api_key(tmp_path):
@@ -92,6 +92,15 @@ def test_scrapegraphai_env_key_is_detected_as_sgai_header(tmp_path):
     assert detected.auth == {"shape": "api_key_header", "header": "SGAI-APIKEY"}
     assert detected.base_url == "https://v2-api.scrapegraphai.com"
     assert detected.probe == "api/credits"
+
+
+def test_fetchin_env_key_is_detected_as_x_api_key(tmp_path):
+    env = _write_env(tmp_path, "FETCHINIO_API_KEY=fetchin_example\n")
+    [detected] = prov.scan_env(env)
+    assert detected.provider == "Fetchin"
+    assert detected.auth == {"shape": "api_key_header", "header": "X-API-Key"}
+    assert detected.base_url == "https://api.fetchin.io"
+    assert detected.probe == "api/v1/subscription"
 
 
 def test_trestleiq_env_key_is_detected_as_lowercase_x_api_key(tmp_path):

@@ -23,6 +23,7 @@ _KNOWN: dict[str, tuple[str, str, str]] = {
     "dropleads": ("credits", "manual", "api"),
     "trykitt": ("cash", "manual", "api"),
     "harvestapi": ("cash", "auto_recharge", "api"),  # Owner will enable vendor auto top-up for production.
+    "fetchinio": ("credits", "manual", "api"),
     "dataforseo": ("cash", "auto_recharge", "api"),
     "tikhub": ("cash", "auto_recharge", "api"),
     "tinyfish": ("cash", "manual", "api"),
@@ -95,6 +96,9 @@ _QUOTAS: dict[str, dict] = {
     "aiark": {"limit": 15000, "period": "billing", "resets_at_rule": "monthly subscription; date not reported by API"},
 }
 _RATE_LIMITS: dict[str, dict] = {
+    # The account reports 5 requests/s, but /post/engagement consumes two rate-limit units. The
+    # provider-wide limiter cannot weight one endpoint, so two calls/s is the safe shared-key pace.
+    "fetchinio": {"limit": 2, "window_s": 1, "source": "policy"},
     "adyntel": {"limit": 5, "window_s": 1, "source": "docs"},
     # Search's documented burst allowance is the strictest request-count limit shared by these
     # hosts. Fetch additionally meters URLs and Agent limits concurrency; upstream remains the
