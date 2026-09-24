@@ -16,12 +16,21 @@ tools-registry is built so that **reading the source does not help an attacker**
 is hidden in the code. Secrets live in the database (encrypted with a Fernet key held only in the server
 environment) and enforcement happens server-side and in the operating system.
 
+Durable objects created with a shared provider credential are assigned to one organization before
+their upstream id is exposed. Every shared-key read, use, update, or delete checks that assignment
+before contacting the provider; unknown and cross-organization ids return the same denial. If a
+create succeeds upstream but ownership cannot be committed, treg attempts compensating deletion and
+returns an error without exposing the unmanaged id. BYOK objects remain scoped by the customer's
+provider account and bypass this platform ownership table.
+
 - **The proxy never hands the key to the caller.** For an HTTP tool, the registry injects the credential
   server-side and makes the upstream call; the consumer's token only authorizes it.
 - **Encryption at rest.** Stored secrets are Fernet-encrypted; the key is an environment variable, never
   in the repo or the database.
 - **Tenant isolation.** Every secret, tool, and record is scoped to an org; access is gated by role and,
-  per member, by an explicit tool allow-list.
+  per member, by an explicit tool allow-list. Pinned agent tags additionally scope call/run history,
+  archived results and shared-provider async ownership; foreign and untagged records return 404.
+  These scopes do not partition a team's BYOK account or authenticate public media URLs.
 - **SSRF guard.** A tool's upstream host is re-resolved at call time and internal/metadata addresses are
   refused (defeats DNS-rebinding).
 - **Local runs are sandboxed.** `treg run` on a member's machine executes the CLI as a locked-down
@@ -40,6 +49,11 @@ environment) and enforcement happens server-side and in the operating system.
   (`TREG_BLOCKED_EMAIL_DOMAINS`, unset means no blocks) remains a configurable speed bump at every
   sign-in/sign-up door and both team-creating endpoints; it fails open on classifier errors.
   Suspend abusive users and teams separately, retaining their records for investigation.
+- **Designated sign-in codes are a password, stored only as a hash.** `TREG_FIXED_LOGIN_CODES`
+  (unset by default) maps an email with no inbox, such as an app directory reviewer's demo account,
+  to the SHA-256 of a fixed code. The email-code door then sends nothing and accepts only that code,
+  under the same five-guess and start limits as an emailed code. Use a long random code, give the
+  account a dedicated team with sample data only, and rotate by changing the hash.
 
 ## Archive object storage credentials
 

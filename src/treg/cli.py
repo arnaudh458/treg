@@ -340,18 +340,21 @@ def _show(resp: httpx.Response) -> None:
 
 
 def _show_charge_line(resp: httpx.Response) -> None:
-    """The bill for a metered call, on stderr, next to the answer: `X-Treg-Cost-Micro` is the settled
-    charge and `X-Treg-Call-Id` the record to quote — neither is in the provider's body, which is all
-    stdout carries. A customer who saw only `results` and `next_token` could not tell whether a
-    $0.13 estimate or a $0.0067 row had been charged and stopped testing (2026-09-04). Silent for an
-    unmetered call (no header) — a team's own key is never billed — and for every non-call response."""
+    """The bill for a metered call, on stderr, next to the answer. Async submissions are the one
+    exception: their cost header is a hold pending terminal settlement, so say `reserved` rather
+    than falsely claiming the ceiling was charged. `X-Treg-Call-Id` is the record to quote; neither
+    field is in the provider body, which is all stdout carries. Silent for an unmetered call (no
+    header) — a team's own key is never billed — and for every non-call response."""
     headers = getattr(resp, "headers", {}) or {}
     cost = headers.get("X-Treg-Cost-Micro")
     if cost is None:
         return
-    line = f"treg: charged ${int(cost) / 1_000_000:g}"
+    asynchronous = bool(headers.get("X-Treg-Async"))
+    line = (f"treg: reserved up to ${int(cost) / 1_000_000:g} for async settlement"
+            if asynchronous else f"treg: charged ${int(cost) / 1_000_000:g}")
     if headers.get("X-Treg-Idempotent-Replay"):
-        line += " by the original call (this is a replay — nothing new charged)"
+        line += (" by the original call (this is a replay — nothing new reserved)"
+                 if asynchronous else " by the original call (this is a replay — nothing new charged)")
     if call_id := headers.get("X-Treg-Call-Id"):
         line += f" · call id {call_id}"
     print(line, file=sys.stderr)
@@ -2468,10 +2471,11 @@ def await_async_task(descriptor: dict, submission: httpx.Response, call_fn, cloc
             if found["ttl_note"]:
                 result["ttl_note"] = found["ttl_note"]
             return result
-        if outcome == "failure":
+        if outcome in ("failure", "billed_failure"):
             return {"code": 2, "task_id": str(task_id), "recovery": recovery,
                     "response": response, "status": status}
-        if status not in warned:
+        progress = {str(item) for item in descriptor["status"].get("progress", [])}
+        if status not in progress and status not in warned:
             warned.add(status)
             _clock_report(clock, f"warning: unknown async status {_shown(status)!r}; continuing to wait")
         _clock_report(clock, f"async task {_shown(task_id)}: {_shown(status)} "
@@ -4758,7 +4762,7 @@ def _cost_label(cost) -> str:
     if not isinstance(cost, dict):
         return "-"
     if cost.get("display_unit") and cost.get("display_usd") is not None:
-        return (f"${cost['display_usd']:.3g}" + cost.get("display_suffix", "")
+        return (cost.get("display_prefix", "") + f"${cost['display_usd']:.3g}" + cost.get("display_suffix", "")
                 + "/" + cost["display_unit"])
     kind = (cost.get("type") or "").replace("_", " ")
     value, currency = cost.get("value"), cost.get("currency") or ""
@@ -4982,7 +4986,7 @@ def _cost_usd(cost: dict | None) -> str:
     if not isinstance(cost, dict):
         return "-"
     if cost.get("display_unit") and cost.get("display_usd") is not None:
-        return (f"${cost['display_usd']:.3g}" + cost.get("display_suffix", "")
+        return (cost.get("display_prefix", "") + f"${cost['display_usd']:.3g}" + cost.get("display_suffix", "")
                 + "/" + cost["display_unit"])
     usd = cost.get("usd")
     if usd is None:
@@ -5827,6 +5831,22 @@ def cmd_connections_use(args, cfg) -> None:
 def cmd_connections_rm(args, cfg) -> None:
     with _client(cfg) as c:
         _show(c.delete(f"/connections/{args.id}"))
+
+
+def cmd_resources_list(args, cfg) -> None:
+    """List provider resources through the server's unified BYOK/platform view."""
+    with _client(cfg) as c:
+        org_id = _active_org_id(cfg, c)
+        if org_id is None:
+            sys.exit("no active org — run `treg org use <slug>`")
+        params = {
+            key: value for key, value in {
+                "provider": args.provider,
+                "kind": args.kind,
+                "include_deleted": args.include_deleted,
+            }.items() if value not in (None, "", False)
+        }
+        _show(c.get(f"/orgs/{org_id}/provider-resources", params=params))
 
 
 def _byo_body(args) -> dict:
@@ -6690,6 +6710,17 @@ def build_parser() -> argparse.ArgumentParser:
     ct.add_argument("--all", action="store_true", dest="show_all",
                     help="include management endpoints (account/utility CRUD) hidden from the browse by default")
     ct.set_defaults(fn=cmd_catalog)
+
+    # ---- durable provider resources ---------------------------------------------------------
+    rp = mk(sub, "resources", "Resources created on treg-provided accounts, scoped to your team.",
+            "treg resources list --provider fishaudio --kind voice")
+    rps = rp.add_subparsers(dest="sub", required=True, metavar="<subcommand>")
+    rpl = mk(rps, "list", "List this team's durable provider resources.",
+             "treg resources list --provider fishaudio --kind voice")
+    rpl.add_argument("--provider", default="", help="filter by provider id")
+    rpl.add_argument("--kind", default="", help="filter by resource kind")
+    rpl.add_argument("--include-deleted", action="store_true", help="include deleted tombstones")
+    rpl.set_defaults(fn=cmd_resources_list)
 
     # ---- connections (connecting a provider lives here now; `oauth` is the hidden old spelling) ----
     def _connect_args(parser, prefix):

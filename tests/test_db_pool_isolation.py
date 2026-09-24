@@ -34,6 +34,8 @@ EXPECTED_MAKERS: dict[str, set[str]] = {
     "api.py": {API}, "mcp.py": {API}, "routers/resources.py": {API},
     "application/auth.py": {API}, "application/billing.py": {API}, "application/connect.py": {API},
     "application/asynctasks.py": {API},
+    # Organization resource CRUD uses short API-pool transactions around, never during, upstream I/O.
+    "application/provider_resources.py": {API},
     # Interactive paid runs: short transactions between legs, never across upstream waits.
     "application/arena.py": {API},
     # Snapshot read on the request path; the collector runs in the `treg-worker` process (see

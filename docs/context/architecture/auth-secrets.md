@@ -13,6 +13,9 @@ sources:
   - src/treg/infra/oauth_exchange.py
   - src/treg/infra/oauth_refresh.py
   - src/treg/oauth_providers.py
+  - frontend/src/state/session.js
+  - frontend/src/state/keys.js
+  - frontend/src/pages/TeamPage.vue
   - src/treg/health.py
   - src/treg/application/connect.py
   - src/treg/routers/connections.py
@@ -36,34 +39,54 @@ related:
 
 # Auth & secrets
 
+Tavily uses a pasted Bearer key at `https://api.tavily.com`. Its free internal `GET /usage` probe
+rejects invalid credentials and validates both team-owned and optional platform credentials without
+exposing usage as a catalog tool. `TREG_PLATFORM_KEY_TAVILY` supplies the server-held fallback; the
+existing own-key-first ladder means a team's key always wins and remains unmetered. The public
+surface is limited to Search, Extract, Map, and Crawl.
+
+`ADYNTEL` is the first pasted-key provider whose two credentials ride in the JSON request body.
+The primary `api_key` and second `email` are ordinary declarative bindings with `location: json`;
+the relay contains no Adyntel branch. Tier 4 reads `TREG_PLATFORM_KEY_ADYNTEL` and
+`TREG_PLATFORM_EMAIL_ADYNTEL`, while a team connection stores its own pair and remains unmetered.
+The first connect step can only receive the key, so the provider's declared HTTP 422 probe outcome
+leaves it explicitly unchecked until the email is added; it is never labelled verified from that
+partial probe. JSON injection requires a JSON object, overwrites only the named top-level fields,
+rejects duplicate object keys, emits non-ASCII text as UTF-8, and recalculates Content-Length after
+serialization. It is deliberately not byte-faithful and must not be used for APIs that sign raw
+body bytes. Providers without a JSON binding retain the existing streamed-body path.
+
+`TRESTLEIQ` uses a pasted raw `x-api-key` header. Its connection probe calls a provider-owned
+invalid-number sandbox fixture. The typed `probe_cost_micro=15000` marks the first paid key probe;
+the connect dialog renders the warning from that field, and provisioning deliberately omits it from
+the tool health check so later health runs cannot spend the team's provider wallet.
+`TREG_PLATFORM_KEY_TRESTLEIQ` supplies the optional shared binding; a team's own key still wins.
+
 `LIMADATA` uses a pasted raw `x-api-key` header. Its free connection probe sends an invalid empty
 web-search body: the assigned key returns HTTP 400 and a bogus key returns 401. The real local
 connection flow accepted the former and rejected the latter. `TREG_PLATFORM_KEY_LIMADATA` is the
-separate optional shared binding; a team's key still wins and remains unmetered. See
-[LimaData](limadata.md).
+separate optional shared binding; a team's key still wins and remains unmetered.
 
 BounceBan uses a pasted raw `Authorization` header with no `Bearer` prefix. The free
 `GET /v1/account` probe rejected a bogus key with HTTP 401 and accepted the supplied key with HTTP
 200 through the real connection flow. `TREG_PLATFORM_KEY_BOUNCEBAN` supplies the optional shared
 binding; a team's key still wins and remains unmetered. Provisioning includes the standard API tool
-and its explicit waterfall-host companion without exposing the credential. See
-[BounceBan](bounceban.md).
+and its explicit waterfall-host companion without exposing the credential.
 
 ZeroBounce uses the standard pasted-key flow with an `api_key` query parameter. Its free usage
 probe rejects bad keys with HTTP 403 and accepts the supplied key with HTTP 200. The probe does not
 use the balance route because that route can answer a bad key with HTTP 200 and `Credits=-1`.
 `TREG_PLATFORM_KEY_ZEROBOUNCE` supplies the optional shared binding; a team's key still wins and
-remains unmetered. See [ZeroBounce](zerobounce.md).
+remains unmetered.
 
 `MOLTSETS` is a pasted Bearer-key provider whose free `POST /get_account` probe validates both team
-and optional platform credentials. The existing own-key-first ladder and deployment allow-list apply;
-see [MoltSets](moltsets.md).
+and optional platform credentials. The existing own-key-first ladder and deployment allow-list apply.
 
-`SUMBLE` uses the standard pasted Bearer-key path and a free technology-search miss probe; garbage-key rejection was verified through the local connection API. See [Sumble](sumble.md).
+`SUMBLE` uses the standard pasted Bearer-key path and a free technology-search miss probe; garbage-key rejection was verified through the local connection API.
 
 `GETLEADSIO` uses the standard pasted Bearer-key path at `app.getleads.io`. Its free fair-use probe
 rejects bad keys with 401 and accepts a valid zero-credit account. The same route supplies capacity
-data; it is not a public catalog tool. See [GetLeads.io](getleadsio.md).
+data; it is not a public catalog tool.
 
 Financial Datasets uses the standard pasted-key and platform-key paths with a raw `X-API-KEY`
 header. `OAuthProvider.probe_url` points at the smallest practical price-snapshot request and
@@ -84,7 +107,12 @@ POST Contact Finder probe rejects invalid keys with HTTP 401 and does not requir
 balance to accept a successful probe. `platform_key_quickenrich` supplies the separate server-held platform credential.
 No OAuth app or special injector is needed. See the QuickEnrich section in [catalog](catalog.md).
 
-Tier 4 has explicit platform-key slots for MiniMax, OpenRouter, Replicate, reAPI and PiAPI. The web and async cron
+TinyFish uses a pasted `X-API-Key`. Its primary Agent host supplies the free `/v1/wallet` probe,
+while `CatalogTarget` approves the separate Search and Fetch hosts for the same credential. The
+wallet remains connection/capacity evidence rather than a public tool. `TREG_PLATFORM_KEY_TINYFISH`
+supplies the optional shared binding; a team's own key retains priority and is never metered.
+
+Tier 4 has explicit platform-key slots for MiniMax, OpenRouter, Replicate, reAPI, PiAPI and TinyFish. The web and async cron
 receive them as environment secrets, and the worker constructs the same platform bindings as the call
 path. Key values are never copied into task records, logs or archive evidence.
 
@@ -158,15 +186,18 @@ The hard part: match every credential shape a real skill uses, keep it encrypted
 alive, without the proxy ever branching on shape.
 
 ## Injectors — the seam (`infra/upstream/injectors.py`)
-The proxy calls `inject(headers, params, binding, secret)`, which dispatches on `binding["injector"]`
-through the `INJECTORS` registry (populated by the `@register(name)` decorator). Four shapes, two
+The proxy calls `inject(headers, params, binding, secret, json_body=...)`, which dispatches on
+`binding["injector"]` through the `INJECTORS` registry (populated by the `@register(name)` decorator). Four shapes, two
 mechanics:
 - **place a string:** `env_injector`, `cli_auth_injector` → `_place()` renders `binding["format"]` (with
-  `{secret}`) into a header or query param per `binding["location"]`/`["name"]`.
+  `{secret}`) into a header, query parameter, or top-level JSON field per
+  `binding["location"]`/`["name"]`.
 - **pull a field from a JSON blob:** `secret_file_injector`, `oauth_injector` → `_token_from_json(blob,
   binding["secret_field"])` extracts a token (default field `access_token`) then `_place()`s it.
 
-`_place()` overwrites a same-named caller param for query bindings so the injected credential wins.
+`_place()` overwrites a same-named caller value for query and JSON bindings so the injected
+credential wins. Binding validation accepts only `header`, `query`, or `json`, and rejects duplicate
+target names within each location.
 Adding a shape is one function; the proxy never changes.
 
 ## Encryption + tokens (`crypto.py`)
@@ -491,12 +522,12 @@ platform-provider allow-list is also required. Own keys always take precedence.
 
 `oauth_providers.CONTACTOUT` verifies against `/v1/stats` and requires `status_code: 200` as well
 as HTTP success. Its binding injects the raw `token` header. Both garbage rejection and valid
-connection creation were tested live; see [ContactOut](contactout.md).
+connection creation were tested live.
 
 
 ## HarvestAPI integration
 
-`HARVESTAPI` uses a pasted `X-API-Key` and internal `/users/my-api-user` probe. The wallet endpoint is not a catalog tool. See [HarvestAPI](harvestapi.md) for own-key priority and platform configuration.
+`HARVESTAPI` uses a pasted `X-API-Key` and internal `/users/my-api-user` probe. The wallet endpoint is not a catalog tool.
 
 
 ## Dropleads key connection
@@ -507,7 +538,6 @@ zero balance. One connection provisions the primary `dropleads` tool and the `dr
 companion tool; both bind the same secret. `CatalogTarget` separately permits catalog calls to the
 companion host. `platform_key_dropleads` supplies the optional shared key, and the platform-provider
 allow-list remains required. An organization's own key has priority and is never metered by treg.
-See [Dropleads](dropleads.md) for the approved hosts and public tool surface.
 
 
 ## Prospeo key connection
@@ -517,4 +547,3 @@ See [Dropleads](dropleads.md) for the approved hosts and public tool surface.
 account and rejects a garbage key with `INVALID_API_KEY`; the account route remains internal rather
 than becoming a catalog tool. `platform_key_prospeo` supplies the optional shared key, gated by the
 platform-provider allow-list. An organization's own key keeps priority and is never metered by treg.
-See [Prospeo](prospeo.md) for the public surface and live verification evidence.

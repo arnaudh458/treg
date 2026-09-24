@@ -34,6 +34,7 @@ sources:
   - tests/test_tag_billing_adversarial.py
   - tests/test_call_architecture.py
   - tests/test_asynctasks.py
+  - tests/test_relay_content_length.py
 related:
   - architecture/data-model.md
   - architecture/auth-secrets.md
@@ -85,7 +86,12 @@ incl. duplicates, headers, cookies, body bytes):
    `_DROP_REQUEST = _HOP_BY_HOP | _CONTROL`, so none leaks upstream. `_scrub_treg_cookies` also strips
    treg's own cookies (`treg_session`, `treg_oauth_state`) from the Cookie header - the dashboard's
    `credentials:'include'` Try-it would otherwise leak our session token - while keeping other cookies.
-3. **the injected credential(s)** - each binding overwrites only its target header/param.
+3. **the injected credential(s)** - each binding overwrites only its target header, query parameter,
+   or top-level JSON field. A JSON binding is an explicit provider contract and is the only case
+   that buffers and reserializes the caller body; all other bodies retain the streamed byte path.
+   This is semantic JSON relay, not byte-faithful relay: formatting changes, non-ASCII text is
+   emitted as UTF-8, and duplicate keys fail closed. Never use a JSON binding where the upstream
+   signs or hashes the caller's raw body bytes.
 
 > **What treg keeps from a call.** Successes retain no content: the relay forwards bytes and the audit
 > row records status, size and timing. A **failed relayed call** - platform, own-key, or plain own-tool
@@ -131,7 +137,7 @@ Faithfulness mechanics inside `relay()`:
   response exactly once.
 
 A request may carry several credentials: `relay()` loops `tool.bindings` and calls
-`injectors.inject(headers, params, binding, crypto.decrypt(secret.value))` per binding.
+`injectors.inject(headers, params, binding, crypto.decrypt(secret.value), json_body=...)` per binding.
 Bindings can also stamp provider protocol constants: a format with no `{secret}` renders literally
 (Crustdata's required API-version header is the first registry use). It still carries the same secret
 reference for binding validation and lifecycle, and the assignment overwrites a caller-supplied value.
@@ -318,7 +324,8 @@ an unknown `injector` and a cross-org/dangling `secret_id`; `register_skill` run
 `call_tool` translates a call-time injector `ValueError` and an upstream `httpx.RequestError` into a
 `502` instead of an unhandled 500 (and audits the failed attempt, not just successes). A binding
 `format` is validated to render with only `{secret}` and `name`/`secret_field` to be non-empty strings;
-duplicate `location:"query"` binding names are rejected (they'd silently overwrite each other).
+duplicate target names are rejected independently for `location:"header"`, `"query"`, and `"json"`
+(they would silently overwrite each other).
 `health._probe` skips a dangling binding rather than `KeyError`-ing the whole run.
 
 **Relay security + faithfulness (bug-hunt):** the response side strips a `Set-Cookie` for treg's own
@@ -358,6 +365,12 @@ reserve, relay faithfulness, capacity, overflow, settle, audit, cancellation - a
 unchanged. The parent only assembles `{output, raw, _treg}` and owns the idempotency label.
 
 ## Platform capacity: refuse before reserve (plan step D)
+
+Catalog `platform_request` checks and provider-specific request guards run only after a platform
+offer is selected and before reserve. Exact selectors require evidence such as Tavily Search's
+caller-supplied `include_usage: true`. Openmart requires its explicit bounded record count; Tavily
+Map and Crawl require an integer `limit` from 1 to 20. Missing, Boolean and out-of-range values are
+caller errors. BYOK is unchanged because the provider, not treg, bears that account's exposure.
 
 Tier 4 spends treg's own vendor account, and that account can be empty. `_resolve_marketplace_call`
 asks, after `_platform_offer` says yes: is this call **exhausted** in the in-process capacity view
@@ -516,6 +529,17 @@ Unknown and cross-org ids receive the same 403 without contacting the provider. 
 are learned from an authorized successful poll or from the worker's terminal response. BYOK keeps its
 faithful-relay semantics because those ids belong to the caller's own provider account.
 
+Durable shared-account objects use the separate catalog `managed_resource` contract and
+`ProviderResource` table. Create relays with no DB connection held, then commits ownership before the
+provider id is returned; persistence failure triggers best-effort provider deletion and returns a
+treg 502 without exposing the id. Update changes local display state only after upstream success.
+Delete authorizes active or tombstoned ownership, treats an owned upstream 404 as deleted, then
+tombstones locally, making retries safe. These rules run only on the platform-key tier; own keys keep
+the ordinary faithful relay. A managed `use` declaration may permit provider-public ids through a
+bounded GET predicate. The local ownership check runs first; cross-org and tombstoned ids are denied
+without upstream I/O, while wholly unassigned ids are verified only after the DB phase closes and
+before money is reserved. Managed responses remain under the same 8 MiB complete-body limit.
+
 An owned platform status poll with an explicit free price and zero estimate takes the
 `MarketplaceCall.free_owned_poll` branch. It bypasses a new poll reservation and settlement while
 buffering the response for `observe_owned_poll`, which learns fetch ownership and finalizes the
@@ -550,4 +574,23 @@ CLI output, boundaries, Range, disconnects, settlement evidence, archive and rep
 
 ## HarvestAPI integration
 
-Catalog entries can opt into `strict_query`: `_enforce_catalog_query` rejects bodies, undeclared/duplicate query parameters, missing required inputs and unsupported enum values before credential selection. It applies to catalog calls on every tier, leaves unmarked entries unchanged and does not rewrite requests or constrain arbitrary raw own-tool relays. See [HarvestAPI](harvestapi.md).
+Catalog entries can opt into `strict_query`: `_enforce_catalog_query` rejects bodies,
+undeclared/duplicate query parameters, missing required inputs and unsupported enum values before
+credential selection. They can separately opt into `body_allowlist`: `_enforce_catalog_body`
+rejects undeclared top-level JSON fields, missing required fields, invalid declared scalar values,
+and arrays outside their declared cardinality or item enum. An omitted optional array is allowed;
+its cardinality applies only when the caller supplies it. Both checks apply to catalog calls on every
+tier, leave unmarked entries unchanged and do not constrain arbitrary raw own-tool relays. Legacy
+`resource_ownership.requires` accepts a declared body
+parameter as well as path/query parameters, allowing a POST status utility to authorize an opaque
+shared-account task id.
+
+## Pinned shared-provider reads
+
+`_enforce_platform_async_ownership` adds `pinned_tag_predicates` to its org-scoped task and resource
+queries. All pins must match the submission snapshot; a pinned unknown/foreign id returns 404 before
+relay. BYOK and raw own-tool access keep their existing credential ACLs. The shared-provider
+`Idempotency-Key` rewrite additionally includes the complete enforced pin, so different customers
+cannot receive one upstream job through provider deduplication. Unpinned digests are unchanged.
+`intake.prepare_call_intake` includes the same full pin in Treg's membership replay namespace. See
+[multi-tenancy](multi-tenancy.md#caller-tags-and-pinned-read-scopes) for the history and ledger scopes.

@@ -12,9 +12,10 @@ def add(db: AsyncSession, **values) -> Feedback:
     return row
 
 
-async def get(db: AsyncSession, feedback_id: int, org_id: int) -> Feedback | None:
+async def get(db: AsyncSession, feedback_id: int, org_id: int, *predicates) -> Feedback | None:
+    """`predicates` narrows the team scope further (a pinned reader's tags); the caller builds them."""
     return (await db.execute(select(Feedback).where(
-        Feedback.id == feedback_id, Feedback.org_id == org_id,
+        Feedback.id == feedback_id, Feedback.org_id == org_id, *predicates,
     ))).scalar_one_or_none()
 
 

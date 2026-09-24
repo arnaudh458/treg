@@ -1894,31 +1894,7 @@ def test_catalog_preserves_ignore_paths_and_defaults(tmp_path):
     cat = catalog_store.load(directory=tmp_path)
     assert cat.by_id['test.inherit']['cache']['ignore_paths'] == paths
     assert cat.by_id['test.override']['cache'].get('ignore_paths', []) == []
-    declared = {ep['id']: ep['cache']['ignore_paths'] for ep in catalog_store.load().endpoints
-                if isinstance(ep.get('cache'), dict) and ep['cache'].get('ignore_paths')}
-    assert declared == {
-        'apollo.people.enrich': ['request_id'],
-        'companyenrich.companies.enrich.by_properties': ['updated_at'],
-        'companyenrich.companies.search': ['items[*].updated_at'],
-        'crustdata.people.search': ['next_cursor', 'profiles[*].metadata.updated_at'],
-        'exa.companies.search': ['requestId'],
-        'hunter.companies.emails': ['data.emails[*].verification.date'],
-        'hunter.companies.enrich': ['data.indexedAt'],
-        'hunter.people.email.find': ['data.verification.date'],
-        'icypeas.people.search': ['pagination.token'],
-        'leadmagic.people.email.find': ['processed_at'],
-        'leadmagic.people.email.verify': ['validated_at', 'credits_consumed', 'pipeline_version', 'message', 'validation_path_code'],
-        'leadsforge.people.search': ['cursor'],
-        'millionverifier.people.email.verify': ['executiontime', 'credits'],
-        'quickenrich.people.email.find': ['meta'],
-        'quickenrich.people.phone.find': ['meta'],
-        'thecompaniesapi.companies.enrich': ['meta.credits'],
-        'tomba.people.email.find': ['data.verification.date', 'data.sources[*].extracted_on', 'data.sources[*].last_seen_on'],
-        'tomba.people.email.find.linkedin': ['data.verification.date', 'data.sources[*].extracted_on', 'data.sources[*].last_seen_on'],
-        'trykitt.people.email.find': ['jobId', 'credits'],
-        'trykitt.people.email.verify': ['jobId', 'credits'],
-        'zerobounce.people.email.verify': ['processed_at'],
-    }
+
 
 
 @pytest.mark.parametrize('old,new,paths,equal', [

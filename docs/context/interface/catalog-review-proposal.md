@@ -11,6 +11,14 @@ related:
 
 # Catalog browse review — categories, platform placement, domain sections
 
+## Web capability extension (2026-09-21)
+
+The `web` platform label is now **Open web & SEO data** and its capability taxonomy has four explicit
+jobs: `web.search`, `web.extract`, `web.map`, and `web.crawl`. Tavily implements all four, but only
+Search has a Tavily routing adapter. Extract, Map, and Crawl stay direct-only because their grouped
+credit debits are not suitable for automatic provider fallback. This extends the platform's job
+vocabulary without adding a top-level category or exposing Tavily's account and management routes.
+
 Reviewer pass over the browse taxonomy that an agent (or human) navigates to find data:
 the top-level **categories**, each platform's **category** placement, and the per-platform
 **domain sections** that `catalog_store._domain` derives.

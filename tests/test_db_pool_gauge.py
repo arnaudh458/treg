@@ -59,7 +59,8 @@ async def test_gauge_emits_one_event_per_window_with_peak_capacity_and_headroom(
 
 
 def test_connection_budget_multiplies_per_process_by_workers_and_the_deploy_overlap():
-    per_process = sum(s["pool_size"] + s["max_overflow"] for s in infra_db.POOL_SPECS.values())
+    per_process = sum(infra_db.POOL_SPECS[name]["pool_size"] + infra_db.POOL_SPECS[name]["max_overflow"]
+                      for name in ("api", "admin", "background"))
     one = infra_db.connection_budget(workers=1)
     two = infra_db.connection_budget(workers=2)
     assert one == {"per_process": per_process, "workers": 1,

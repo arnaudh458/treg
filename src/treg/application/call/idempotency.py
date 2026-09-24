@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
@@ -39,7 +40,9 @@ def _idempotency_key(raw_header: str | None) -> str:
 _IDEM_SCOPE_SEP = "\x1f"
 
 
-def _scoped_idempotency_key(key: str, meta: CallMeta) -> str:
+def _scoped_idempotency_key(
+    key: str, meta: CallMeta, *, pinned_tags: dict | None = None,
+) -> str:
     """The caller's label, PARTITIONED by the primary tag.
 
     A reselling builder runs every one of their users through one token, so two of them will both
@@ -53,12 +56,16 @@ def _scoped_idempotency_key(key: str, meta: CallMeta) -> str:
     rebuilding the table. Every access site keeps querying by (membership_id, key) and simply receives
     this value.
 
-    Only the PRIMARY dimension partitions. Retry scoping cannot generalize the way budgets do: a call
-    tagged `customer=a, workspace=b` has no principled answer for which of them owns the key.
+    The primary caller-asserted dimension still partitions unpinned callers. An enforced pin is
+    additionally part of the namespace: changing any pin must not expose an earlier cached body.
     """
     if not key:
         return key
-    return f"{meta.primary_val}{_IDEM_SCOPE_SEP}{key}" if meta.primary_val else key
+    scoped = f"{meta.primary_val}{_IDEM_SCOPE_SEP}{key}" if meta.primary_val else key
+    if pinned_tags:
+        pins = json.dumps(pinned_tags, sort_keys=True, separators=(",", ":"))
+        return f"pins:{pins}{_IDEM_SCOPE_SEP}{scoped}"
+    return scoped
 
 
 def _idem_display(key: str) -> str:

@@ -16,7 +16,6 @@ proposed_capabilities:
   image-gen.image-01.from_text: "Generate images with MiniMax image-01"
   voice-gen.speech-2-8-hd.generate: "MiniMax Speech 2.8 HD"
   voice-gen.speech-2-8-turbo.generate: "MiniMax Speech 2.8 Turbo"
-  voice-gen.voices.list: "List available MiniMax voices"
 async:
   id_from: task_id
   poll:

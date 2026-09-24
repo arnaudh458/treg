@@ -131,6 +131,8 @@ async def catalog_endpoint_access(
                      f"can exceed it)" if cost.get("settle") == "usage" else
                      f"${low:g}-${ledger.usd(estimate):g} by model, resolution and duration (reserved "
                      f"at the table row your request matches)")
+        elif isinstance(cost.get("display_usd"), (int, float)) and cost.get("display_unit"):
+            price = f"${cost['display_usd']:g}/{cost['display_unit']}"
         else:
             price = f"~${ledger.usd(estimate):g}/call"
         return {

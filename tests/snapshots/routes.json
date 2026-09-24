@@ -566,6 +566,24 @@
       "GET",
       "HEAD"
     ],
+    "name": "legacy_dashboard_asset",
+    "path": "/app/legacy/assets/{path:path}"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "dashboard_asset",
+    "path": "/app/ui/assets/{name}"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
     "name": "dashboard",
     "path": "/app"
   },
@@ -908,6 +926,32 @@
       "GET",
       "HEAD"
     ],
+    "name": "jev_page",
+    "path": "/jev"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "jev_xboost_json",
+    "path": "/jev/xboost.json"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "POST"
+    ],
+    "name": "jev_xboost_judge",
+    "path": "/jev/xboost/judge"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
     "name": "blog_index",
     "path": "/blog"
   },
@@ -919,6 +963,15 @@
     ],
     "name": "blog_people_search_bench",
     "path": "/blog/people-search-bench"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "blog_work_email_finding_bench",
+    "path": "/blog/work-email-finding-bench"
   },
   {
     "kind": "APIRoute",
@@ -1697,6 +1750,15 @@
     ],
     "name": "list_api_key_events",
     "path": "/orgs/{org_id}/api-keys/{key_id}/events"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "list_provider_resources",
+    "path": "/orgs/{org_id}/provider-resources"
   },
   {
     "kind": "APIRoute",

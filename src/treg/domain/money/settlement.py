@@ -143,6 +143,9 @@ def derive_basis(
             elif isinstance(usage_unit_micro, int) and usage_unit_micro > 0:
                 amount["unit_micro"] = usage_unit_micro
             reserve = table_amount_micro(cost, request, input_schema, unit_micro)
+        elif cost.get("reported_charge"):
+            amount = {"kind": "observed"}
+            reserve = table_amount_micro(cost, request, input_schema, unit_micro)
         else:
             amount = {"kind": "table", "cost": cost, "input": input_schema,
                       "request": request, "unit_micro": unit_micro}

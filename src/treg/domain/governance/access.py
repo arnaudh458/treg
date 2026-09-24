@@ -10,6 +10,15 @@ from ...models import DenyRule, Tool
 from ..identity.access import Caller
 
 
+def pinned_tag_predicates(column, pinned_tags: dict | None) -> list:
+    """Match every server-enforced pin in SQL, before pagination or loading result bodies.
+
+    Missing/NULL tags fail closed. An unpinned reader retains the enclosing org scope.
+    JSON string extraction is portable across the supported SQLite and PostgreSQL engines.
+    """
+    return [column[key].as_string() == value for key, value in (pinned_tags or {}).items()]
+
+
 class AccessPolicyError(Exception):
     """A tool or project ACL refusal translated by the calling interface."""
 

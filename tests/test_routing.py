@@ -102,6 +102,21 @@ def test_expression_language():
         P.evaluate("nope(a)", doc)
 
 
+def test_admission_only_contract_verifies_adapters_but_generates_no_routed_row():
+    """`routed: false` (contracts.yaml): the influencers.club raw/profile/full tiers are one provider
+    at three prices, so their contract exists for cache result admission only — the adapters must
+    verify (that is what `has_result_rules` reads), and no `treg.creators.profile` row may appear."""
+    cat = catalog_store.load()
+    for cap in ("creators.profile", "creators.analytics", "creators.enrich.by_email"):
+        assert cat.contracts[cap].routed is False
+        assert "treg." + cap not in cat.by_id
+    assert cat.contracts["people.email.find"].routed is True
+    tiers = ["influencersclub.creators.enrich." + t for t in ("raw", "profile", "full", "analytics", "email")]
+    assert all(cat.adapters[eid].verified and not cat.adapters[eid].verify_note for eid in tiers)
+    # ≥ 2 verified children of one capability would have generated a row on a routed contract
+    assert len([e for e in cat.for_capability("creators.profile") if cat.adapters[e["id"]].verified]) >= 2
+
+
 def test_every_shipped_adapter_round_trips_its_fixture():
     cat = catalog_store.load()
     bad = {eid: a.verify_note for eid, a in cat.adapters.items() if not a.verified}
@@ -123,6 +138,67 @@ def test_openmart_tools_are_direct_only_not_routed():
     assert "openmart.companies.search" not in cat.by_id["treg.companies.search"]["routed_children"]
     assert cat.platform_eligible(cat.by_id["openmart.companies.search"])
     assert "openmart.companies.enrich" not in cat.by_id["treg.companies.enrich"]["routed_children"]
+
+
+def test_tavily_routes_synchronous_web_tools_and_keeps_crawl_direct():
+    cat = catalog_store.load()
+    routed = {
+        "tavily.web.search": "treg.web.search",
+        "tavily.web.extract": "treg.web.extract",
+        "tavily.web.map": "treg.web.map",
+    }
+    for child, parent in routed.items():
+        assert cat.adapters[child].verified
+        assert child in cat.by_id[parent]["routed_children"]
+    assert "tavily.web.crawl" not in cat.adapters
+    assert "treg.web.crawl" not in cat.by_id or (
+        "tavily.web.crawl" not in cat.by_id["treg.web.crawl"]["routed_children"]
+    )
+    assert cat.platform_eligible(cat.by_id["tavily.web.crawl"])
+
+
+async def test_tavily_routed_empty_search_is_a_paid_miss_then_falls_through(
+    clients, monkeypatch,
+):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_TAVILY", "PLATFORM-TAVILY")
+    monkeypatch.setenv("TREG_PLATFORM_KEY_EXA", "PLATFORM-EXA")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "tavily,exa")
+    get_settings.cache_clear()
+    seen = []
+    monkeypatch.setattr(call_service, "relay", _relay_by_provider({
+        "tavily": [(200, {"results": [], "usage": {"credits": 1}})],
+        "exa": [(200, {
+            "results": [{"title": "Example", "url": "https://example.com"}],
+            "costDollars": {"total": 0.007},
+        })],
+    }, seen))
+
+    before = await _balance(clients)
+    response = await clients.post(
+        "/call/treg.web.search",
+        json={"q": "example query", "limit": 3},
+        headers={"X-Treg-Route-Prefer": "tavily,exa"},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["_treg"]["served_by"] == "exa.web.search"
+    assert [attempt["outcome"] for attempt in data["_treg"]["tried"]] == ["miss", "hit"]
+    assert [attempt["charged_micro"] for attempt in data["_treg"]["tried"]] == [8_000, 7_000]
+    assert data["_treg"]["charged_micro"] == 15_000
+    assert before - await _balance(clients) == 15_000
+    assert [row[0] for row in seen] == ["tavily", "exa"]
+    assert seen[0][3] == {
+        "query": "example query", "max_results": 3,
+        "search_depth": "basic", "include_usage": True,
+    }
+    async with session_maker() as db:
+        assert (await db.execute(select(Hold))).scalars().all() == []
+        entries = (await db.execute(select(LedgerEntry))).scalars().all()
+    call_id = response.headers["X-Treg-Call-Id"]
+    assert {entry.call_id for entry in entries if entry.kind == "settle"} == {
+        call_id + ":r0", call_id + ":r1",
+    }
+    get_settings.cache_clear()
 
 
 def test_dropleads_routing_surface_contains_only_verified_single_record_tools():

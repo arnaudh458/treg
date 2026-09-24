@@ -155,3 +155,36 @@ async def test_activity_key_index_matches_newest_first_query():
             plan = ' '.join(str(row) for row in rows)
             assert f'ix_{table}_org_key_id' in plan
             assert 'TEMP B-TREE' not in plan
+
+
+async def test_pinned_scope_migration_leaves_legacy_ownership_unattributed():
+    """An additive upgrade preserves records without guessing a customer from today's membership."""
+    await audit.drain()
+    await _drop_everything()
+    try:
+        await _upgrade_to('0041')
+        from treg.models import RunRecord, AsyncTaskRecord, AsyncResourceRecord
+        from treg.timeutil import utcnow_naive
+        async with db.session_maker() as session:
+            org_id = await _insert_org_at_revision(session, name='migration', slug='migration')
+            rows = [
+                RunRecord(org_id=org_id, user_email='test@example.invalid', bundle_name='echo',
+                          exit_code=0, duration_ms=1),
+                AsyncTaskRecord(call_id='old', org_id=org_id, provider='synthetic', endpoint_id='test',
+                                reserved_micro=1, next_check_at=utcnow_naive()),
+                AsyncResourceRecord(org_id=org_id, provider='synthetic', resource_kind='result',
+                                    resource_id='old-file', source_call_id='old'),
+            ]
+            for row in rows:
+                values = row.model_dump(exclude={'tags'})
+                values = {key: value for key, value in values.items() if value is not None}
+                await session.execute(insert(type(row).__table__).values(**values))
+            await session.commit()
+        await _upgrade_to('head')
+        async with db.session_maker() as session:
+            for model in (RunRecord, AsyncTaskRecord, AsyncResourceRecord):
+                records = (await session.execute(select(model))).scalars().all()
+                assert len(records) == 1 and records[0].tags is None
+    finally:
+        await _drop_everything()
+        await db.reset_db()

@@ -59,11 +59,11 @@ CONFIDENCES = ("verified", "documented", "inferred", "unknown")
 COST_SOURCES = ("rate_card_api", "docs", "observed", "vendor_email", "inferred")
 # What `per` counts: "value currency per <per> <unit>". Under `currency: unit` the provider bills in
 # its own meter and `unit` names that meter (see `Catalog.cost_view`).
-COST_UNITS = ("call", "result", "row", "record", "keyword", "page", "character", "review",
+COST_UNITS = ("call", "result", "row", "record", "keyword", "page", "character", "utf8_byte", "review",
               "section", "employee", "GB", "ad", "month", "line", "target", "domain", "item",
               "post", "user",
               "api_unit", "analysis_unit", "retrieval_unit", "index_item_unit", "quota_row",
-              "verifier_credit")
+              "verifier_credit", "step")
 # A platform key spends OUR money on a caller's behalf, so it is allowed only where the price is
 # machine-computable and provenanced. `account`-kind routes are the provider's own bookkeeping —
 # never worth spending on — and `own_account` scope needs the caller's own credential by definition.
@@ -159,25 +159,30 @@ class Catalog:
             grouped = display.get("grouped", False)
             out["display_usd"] = round(usd * per, 9) if grouped else usd
             unit = display["unit"]
-            out["display_unit"] = f"{per:g} {unit}" if grouped else unit
+            if grouped and per == 1_000_000:
+                out["display_unit"] = f"1M {unit}"
+            else:
+                out["display_unit"] = f"{per:g} {unit}" if grouped else unit
             if display.get("round_up"):
                 out["display_unit"] = "started " + out["display_unit"]
             out["display_suffix"] = "+" if display.get("variable") else ""
+            out["display_prefix"] = "up to " if display.get("maximum") else ""
         # A table prices out as a RANGE: `usd` stays the validated ceiling (what reserve and
         # eligibility read), `usd_min` is the cheapest row so a display never shows only the
         # worst case as "the price" (an H3 video is $0.25 typical against a $1.96 ceiling).
         floor = cost.get("table_min")
         if isinstance(floor, (int, float)) and rate is not None and per > 0 and usd is not None:
             out["usd_min"] = min(usd, round(floor * rate / per, 9))
-        # A duration-priced table is ADVERTISED as a per-second rate (`rate_usd_min`-`rate_usd`
-        # per `rate_unit`), the way every video model is quoted; `usd`/`usd_min` stay the
-        # reserve ceiling and floor for a whole call.
+        # A meter-priced table is advertised as a unit rate; `usd`/`usd_min` stay the reserve
+        # ceiling and floor for a whole call.
         span = cost.get("table_rate")
-        if isinstance(span, list) and len(span) == 2 and rate is not None and per > 0 \
+        rate_unit = cost.get("table_rate_unit")
+        if isinstance(span, list) and len(span) == 2 and isinstance(rate_unit, str) \
+                and rate_unit and rate is not None and per > 0 \
                 and usd is not None:
             out["rate_usd_min"] = round(float(span[0]) * rate / per, 9)
             out["rate_usd"] = round(float(span[1]) * rate / per, 9)
-            out["rate_unit"] = "s"
+            out["rate_unit"] = rate_unit
         # A $0 trial price travels with its allowance, so every surface showing the price can also
         # say how much of it a team gets — a bare $0.00 would read as unlimited.
         if provider in self.trial_pools and usd == 0:
@@ -234,9 +239,11 @@ class Catalog:
         # to keep apart.
         priced_or_free = (cost.get("type") == "free" and not cost.get("usd")) \
             or cost.get("confidence") in ("verified", "documented")
+        kind = endpoint.get("kind") or DEFAULT_KIND
+        managed = isinstance(endpoint.get("managed_resource"), dict)
         return bool(priced_or_free
                     and endpoint.get("scope") != "own_account"
-                    and (endpoint.get("kind") or DEFAULT_KIND) not in PLATFORM_INELIGIBLE_KINDS)
+                    and (kind not in PLATFORM_INELIGIBLE_KINDS or managed))
 
 
 _CACHE: Catalog | None = None
@@ -310,15 +317,12 @@ def _table_floor(cost: object, input_schema: object) -> float | None:
     return min(floors) if floors else None
 
 
-def _table_rate(cost: object) -> tuple[float, float] | None:
-    """The per-second rate span of a duration-priced table: (cheapest row, dearest row) in the
-    table's own currency, when EVERY row multiplies its value by a `duration` field. A video
-    model is quoted per second of output everywhere else, so a $0.47-$13.9 total range (minimum
-    clip at the cheapest resolution up to the longest clip at the dearest) reads as a mistake;
-    the rate is what a reader compares. Display only - reserve and settle read the rows."""
+def _table_rate(cost: object) -> tuple[float, float, str] | None:
+    """Rate span for tables whose rows multiply one recognized request meter."""
     if not isinstance(cost, dict) or not isinstance(cost.get("table"), list) or not cost["table"]:
         return None
     values = []
+    meter: str | None = None
     for row in cost["table"]:
         if not isinstance(row, dict) or not isinstance(row.get("value"), (int, float)):
             return None
@@ -327,12 +331,16 @@ def _table_rate(cost: object) -> tuple[float, float] | None:
             # A flat row pinning the duration itself (`duration: -1`, the provider's auto mode)
             # is a whole-clip reserve ceiling, not a rate; the per-second rows still quote the model.
             continue
-        if not isinstance(times, str) or times.rsplit(".", 1)[-1] != "duration":
+        if not isinstance(times, str):
             return None
+        unit = {"duration": "s", "max_steps": "step"}.get(times.rsplit(".", 1)[-1])
+        if unit is None or (meter is not None and meter != unit):
+            return None
+        meter = unit
         values.append(float(row["value"]))
-    if not values:
+    if not values or meter is None:
         return None
-    return (min(values), max(values))
+    return (min(values), max(values), meter)
 
 
 def _parse(directory: Path) -> Catalog:
@@ -399,7 +407,8 @@ def _parse(directory: Path) -> Catalog:
                 raw = {**raw, "cost": {**raw["cost"], "table_min": floor}}
             span = _table_rate(raw.get("cost"))
             if span is not None:
-                raw = {**raw, "cost": {**raw["cost"], "table_rate": list(span)}}
+                raw = {**raw, "cost": {**raw["cost"], "table_rate": list(span[:2]),
+                                        "table_rate_unit": span[2]}}
             ep = _normalize(raw, provider, directory)
             if ep["id"] in by_id:  # first file wins; ids are unique by validator contract
                 continue
@@ -451,6 +460,8 @@ def _parse(directory: Path) -> Catalog:
                   provider_meta=provider_meta, aliases=aliases, contracts=contracts, adapters=adapters)
     from .routing.synthetic import routed_endpoint
     for cap, contract in contracts.items():
+        if not contract.routed:  # admission-only contract: never a treg.<capability> row
+            continue
         row = routed_endpoint(contract, cat.for_capability(cap), adapters, cat.cost_view)
         if row is not None and row["id"] not in by_id:
             by_id[row["id"]] = row
@@ -648,6 +659,8 @@ def _normalize(raw: dict, provider: str, directory: Path) -> dict:
         # Opaque shared-account objects created/read by legacy async endpoint pairs. Resolution
         # enforces `requires`; the buffered successful response persists every `produces` path.
         "resource_ownership": raw.get("resource_ownership") or None,
+        # User-visible long-lived objects created on a shared provider account.
+        "managed_resource": raw.get("managed_resource") or None,
         "platform_request": raw.get("platform_request") or None,
         # How treg serves the catalog fallback after the team's own tool/credential ladder misses.
         # Absent means the provider credential is required. `anonymous` means the verified public
@@ -659,6 +672,7 @@ def _normalize(raw: dict, provider: str, directory: Path) -> dict:
         ),
         "strict_query": raw.get("strict_query") is True,
         "strict_body": raw.get("strict_body") is True,
+        "body_allowlist": raw.get("body_allowlist") is True,
         "cost": _effective_cost(raw),
         # Absent `tier` means core: the curated first wave predates the split, and treating an
         # unmarked endpoint as extended would hide it from the platform view entirely.
@@ -770,6 +784,7 @@ def endpoint_view(ep: dict, provider_display: str, cat: Catalog | None = None) -
         "input": ep.get("input") or None,
         **({"strict_query": True} if ep.get("strict_query") else {}),
         **({"strict_body": True} if ep.get("strict_body") else {}),
+        **({"body_allowlist": True} if ep.get("body_allowlist") else {}),
         # the exact request that live-verified this endpoint — the Try-it drawer prefills from it
         # verbatim (it also carries the ground truth the input spec can't express: whether the
         # body is a bare object or an ARRAY of tasks, which dataforseo requires)
@@ -1102,22 +1117,54 @@ def search(query: str, cat: Catalog, limit: int = 25) -> tuple[list[tuple[dict, 
         if sum(1 for i in required if per_tok[i]) < need:
             continue
         scored.append((ep, round(sum(w * idf[i] for i, w in enumerate(per_tok)), 4)))
-    # A routed parent (`treg.<capability>`) rides in whenever one of its children matched, at the
-    # best child's score: `find leads` matches `leadsforge.people.email.find` on the PROVIDER's
-    # name, and the row an agent should see first for that job is the one where treg chooses among
-    # every provider — which contains no word of that query (2026-08-28).
+    scored = with_routed_parents(scored, cat)
+    scored.sort(key=lambda row: (-row[1], row[0]["tier"] != "core", not row[0]["verified"], row[0]["id"]))
+    return scored[:max(limit, 0)], len(scored)
+
+
+def with_routed_parents(scored: list[tuple[dict, float]], cat: Catalog) -> list[tuple[dict, float]]:
+    """A routed parent (`treg.<capability>`) rides in whenever one of its children is in `scored`, at
+    the best child's score: `find leads` matches `leadsforge.people.email.find` on the PROVIDER's
+    name, and the row an agent should see first for that job is the one where treg chooses among
+    every provider — which contains no word of that query (2026-08-28). Shared by `search` and the
+    judged page (`candidates` deliberately holds no routed rows), so both pages steer alike."""
     present = {ep["id"] for ep, _ in scored}
     best_child: dict[str, float] = {}
     for ep, score in scored:
         parent_id = f"treg.{ep.get('capability')}" if ep.get("capability") else None
         if parent_id and parent_id not in present and ep.get("kind") != "routed":
             best_child[parent_id] = max(best_child.get(parent_id, 0.0), score)
+    out = list(scored)
     for parent_id, score in best_child.items():
         parent = cat.by_id.get(parent_id)
         if parent is not None and parent.get("kind") == "routed":
-            scored.append((parent, score))
+            out.append((parent, score))
+    return out
+
+
+def candidates(query: str, cat: Catalog, limit: int = 30) -> list[tuple[dict, float]]:
+    """Recall for a JUDGE, not an answer: every concrete endpoint that hits at least one required
+    token, best lexical score first, cut at `limit`.
+
+    `search` demands most of the rare words; that gate is what keeps a keyword page honest and it is
+    also what zeroes task-shaped queries — "apple stock closing prices for last year" carries three
+    words that are parameter VALUES (apple, last, year) and no catalog row will ever contain them.
+    A judge that reads the task can tell a value from a capability; the gate cannot. So this pass
+    admits on ONE hit and lets the judge decide, which is only safe because nothing here is shown
+    without the judge's answer. Routed parents are left out: the judge scores what an endpoint DOES,
+    and `with_routed_parents` puts the parent back over its children afterwards.
+    """
+    m = _match(query, cat)
+    if m is None or limit <= 0:
+        return []
+    tokens, rows, best, idf, required, need = m
+    scored: list[tuple[dict, float]] = []
+    for (ep, _), per_tok in zip(rows, best):
+        if ep.get("kind") == "routed" or not any(per_tok[i] for i in required):
+            continue
+        scored.append((ep, round(sum(w * idf[i] for i, w in enumerate(per_tok)), 4)))
     scored.sort(key=lambda row: (-row[1], row[0]["tier"] != "core", not row[0]["verified"], row[0]["id"]))
-    return scored[:max(limit, 0)], len(scored)
+    return scored[:limit]
 
 
 def score_extra(query: str, cat: Catalog,

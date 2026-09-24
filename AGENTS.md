@@ -39,8 +39,11 @@ Everything else in this file is guidance; these are the contract, and they win o
 3. A request holds zero database connections while upstream or object-storage I/O is in flight.
    Keep `reserve` and `settle` separate; read archive pointers, close the session, then fetch bytes.
 4. Plain `/call/` is a faithful relay: the injected credential, the transport headers listed in
-   `src/treg/infra/upstream/relay.py`, and (on treg's shared key only) the per-org re-scoping of the
-   caller's `Idempotency-Key` are the only rewrites. Never add upstream-specific modeling.
+   `src/treg/infra/upstream/relay.py`, and (on treg's shared key only) the per-org and, for pinned
+   agents, per-pin re-scoping of the caller's `Idempotency-Key` are the only rewrites. A credential
+   binding with `location: "json"` explicitly parses and reserializes the top-level JSON object; it
+   is not byte-faithful and must never be used with an upstream that signs or hashes the raw body.
+   Never add upstream-specific modeling.
    A live-verified free catalog endpoint may declare an anonymous fallback; its empty binding list
    omits credential injection but does not strip or rewrite caller headers.
    Routed endpoints and overflow wrap the child's answer and say so; they never alter it. Responses needing settlement or ownership evidence are buffered by the application
@@ -111,7 +114,7 @@ agents then built against a constitution that was wrong.
   credentials, catalog prices and balances, and writes only what `tests/test_call_architecture.py`
   allowlists (the ledger entries, idempotency claims, OAuth refresh, audit and telemetry, first-call
   markers, tag budgets, capacity marks, overflow spend, the member's daily-cap slot, the per-team
-  archive-question marks). Extend the
+  archive-question marks, and durable provider-resource ownership). Extend the
   test's allowlist in the same PR as any new write, and expect the reviewer to ask why.
 - **The tool hub** (`application/hub/`, behind `TREG_HUB_ENABLED`) runs a maker's recipe as ordinary
   calls: every step goes through `execute_call` under its own hold, a catalog step as the caller and
@@ -163,8 +166,18 @@ xdist is pulled via `--with`, not the lockfile — same as CI. The Postgres CI j
   `[server]` extra, the certificate authority is `[proxy]`. Never import a heavy dependency at the
   top of a CLI-path module; the "Lightweight CLI modules" import-linter contract lists them and
   fails the build.
-- **The dashboard** (`src/treg/web/index.html`) is a single-file Vue app with no build step, so a
-  broken view name fails silently. Verify in a browser.
+- **Frontend rollout.** `frontend/README.md` documents account assignment and rollback.
+  `src/treg/web/dashboard-legacy/` is **deprecated**, retained only for temporary rollout and
+  rollback. Never hand-edit it or mirror new features/fixes into it; `frontend/` is the only
+  maintained Dashboard source. Follow the retirement checklist in `frontend/README.md` to remove
+  it after rollout, including anonymous entries that still use legacy at 100%.
+- **The dashboard** lives in `frontend/` (Vue components, TypeScript entry/transport, Vite).
+  Build with `bash scripts/build-dashboard.sh`; generated assets in `src/treg/web/dashboard/`
+  ship with Python. Run `npm --prefix frontend test` and `npm --prefix frontend run test:e2e`.
+  Existing Options API use cases live in `frontend/src/state/`; preserve their session and
+  navigation behavior when narrowing component state. Never put dashboard logic back into HTML.
+  Manage third-party browser libraries through pinned npm packages or version-pinned CDN URLs;
+  do not commit copied library builds. Keep critical app runtimes available from the npm build.
 - **Schema.** Alembic owns it (`src/treg/alembic/versions/`); every schema change is a revision.
   Startup only verifies the revision and refuses to boot when behind; migrations run only via
   `python -m treg upgrade`.
@@ -176,6 +189,15 @@ xdist is pulled via `--with`, not the lockfile — same as CI. The Postgres CI j
   names the fragments it updated.
 - `/mcp/` and `/mcp/v2/` differ on purpose. A change to either or to shared MCP code is reviewed
   against both; do not unify them in passing.
+- **A catalog data PR is a few rows and a PR body.** Cache admission, comparison declarations,
+  adapters and contracts are rows in `src/treg/catalog/`; each declaration carries a one-line
+  reason and nothing more. The evidence (traffic, byte sizes, change observations, bodies read)
+  goes in the PR body, never into a fragment or a comment. A fragment moves only when a mechanism
+  changes; `drift.sh` naming one is a prompt to check it, not an obligation to write. No dated
+  per-provider sections in `docs/context/architecture/catalog.md`: a provider's quirk lives on
+  its row as a `note`. No per-endpoint tests: the round-trip test over every shipped adapter and
+  the validator already judge the rows, and a test that restates a list of declarations is
+  deleted, not extended. Code that a data PR needs is its own PR, merged first.
 
 ## When writing user-facing copy
 

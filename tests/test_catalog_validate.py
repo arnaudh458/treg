@@ -1,9 +1,109 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from scripts import catalog_validate as validator
 from treg.domain.catalog import store as catalog_store
+from treg.application.call import resolve
+from treg.application.call.types import ResolutionFailed
+
+
+def test_adyntel_catalog_is_seven_bounded_direct_only_tools():
+    catalog = catalog_store.load()
+    endpoints = [ep for ep in catalog.endpoints if ep["provider"] == "adyntel"]
+    assert {ep["id"] for ep in endpoints} == {
+        "adyntel.meta-ads.library.advertiser",
+        "adyntel.meta-ads.library.search",
+        "adyntel.linkedin.search.ads.company",
+        "adyntel.linkedin.search.ads.keyword",
+        "adyntel.google.ads.transparency",
+        "adyntel.tiktok-ads.library.search.company",
+        "adyntel.google.domain.keywords.overview",
+    }
+    assert {(ep["platform"], ep["capability"]) for ep in endpoints} == {
+        ("meta-ads", "meta-ads.library.advertiser"),
+        ("meta-ads", "meta-ads.library.search"),
+        ("linkedin", "linkedin.search.ads"),
+        ("google", "google.ads.transparency"),
+        ("tiktok-ads", "tiktok-ads.library.search"),
+        ("google", "google.domain.overview"),
+    }
+    assert catalog.credit_rates["adyntel"] == 0.011
+    assert all(catalog.platform_eligible(ep) for ep in endpoints)
+    assert all(ep.get("body_allowlist") is True for ep in endpoints)
+    assert all(ep.get("example_file") for ep in endpoints)
+    assert all(ep["id"] not in catalog.adapters for ep in endpoints)
+    assert all("api_key" not in ep["input"]["body"] for ep in endpoints)
+    assert all("email" not in ep["input"]["body"] for ep in endpoints)
+    assert catalog.by_id["adyntel.google.domain.keywords.overview"]["cost"]["value"] == 2
+    assert not any("shopping" in ep["id"] for ep in endpoints)
+    assert not any(ep["id"].endswith(("search.keyword", "ad.detail")) for ep in endpoints)
+
+
+def test_adyntel_catalog_body_contract_rejects_unsafe_or_invalid_values():
+    google = catalog_store.load().by_id["adyntel.google.ads.transparency"]
+    resolve._enforce_catalog_body(google, json.dumps({"company_domain": "example.com"}).encode())
+    for body in (
+        {},
+        {"company_domain": "example.com", "all_ads": True},
+        {"company_domain": "example.com", "webhook_url": "https://example.com"},
+        {"company_domain": "example.com", "api_key": "caller-key"},
+        {"company_domain": "example.com", "email": "caller@example.com"},
+        {"company_domain": "example.com", "extract_text": "yes"},
+        {"company_domain": "example.com", "media_type": "audio"},
+    ):
+        with pytest.raises(ResolutionFailed) as exc:
+            resolve._enforce_catalog_body(google, json.dumps(body).encode())
+        assert exc.value.status_code == 400
+
+    domain = catalog_store.load().by_id["adyntel.google.domain.keywords.overview"]
+    with pytest.raises(ResolutionFailed):
+        resolve._enforce_catalog_body(
+            domain, json.dumps({"company_domain": "example.com", "limit": 2}).encode(),
+        )
+
+
+def test_catalog_body_optional_arrays_are_optional_and_validate_each_item():
+    endpoint = {
+        "id": "example.items",
+        "method": "POST",
+        "body_allowlist": True,
+        "input": {"body": {
+            "name": {"type": "string", "required": True},
+            "formats": {
+                "type": "array[string]", "required": False,
+                "minItems": 1, "maxItems": 2, "enum": ["html", "markdown"],
+            },
+        }},
+    }
+
+    for body in ({"name": "example"}, {"name": "example", "formats": ["markdown"]}):
+        resolve._enforce_catalog_body(endpoint, json.dumps(body).encode())
+
+    for formats in ([], ["markdown", "text"], "markdown", None):
+        with pytest.raises(ResolutionFailed) as exc:
+            resolve._enforce_catalog_body(
+                endpoint, json.dumps({"name": "example", "formats": formats}).encode(),
+            )
+        assert exc.value.status_code == 400
+        assert exc.value.detail["parameter"] == "body.formats"
+
+
+def test_catalog_body_required_arrays_remain_required():
+    endpoint = {
+        "id": "example.items",
+        "method": "POST",
+        "strict_body": True,
+        "input": {"body": {
+            "items": {"type": "array[object]", "required": True, "min": 1, "max": 2},
+        }},
+    }
+
+    with pytest.raises(ResolutionFailed) as exc:
+        resolve._enforce_catalog_body(endpoint, b"{}")
+    assert exc.value.status_code == 400
+    assert exc.value.detail["parameter"] == "body.items"
 
 
 def test_cost_modifiers_accept_only_supported_declarative_credit_rules():
@@ -151,7 +251,7 @@ def test_async_descriptor_accepts_both_poll_and_result_modes():
     (lambda d: d.update(status=[]), "async.status must be a mapping"),
     (lambda d: d["status"].update(path=""), "async.status.path must be a dotted JSON path"),
     (lambda d: d["status"].update(success=[]), "async.status.success must be a non-empty list"),
-    (lambda d: d["status"].update(failure=[]), "async.status.failure must be a non-empty list"),
+    (lambda d: d["status"].update(failure=[]), "needs failure or billed_failure terminal values"),
     (lambda d: d["status"].update(failure=["succeeded"]), "must not overlap"),
     (lambda d: d["status"].update(success=[{"done": True}]),
      "values must be non-empty strings or numbers"),
@@ -227,6 +327,31 @@ def test_resource_ownership_contract_validates_ids_and_declared_parameters():
     )
     assert any("requires needs exactly" in error for error in errors)
     assert any("produces item needs exactly" in error for error in errors)
+
+
+def test_managed_public_lookup_is_read_only_bounded_and_use_only():
+    schema = {"body": {"reference_id": {"type": "string"}}}
+    valid = {
+        "operation": "use", "kind": "voice",
+        "id": {"in": "body", "path": "reference_id"},
+        "public_lookup": {
+            "method": "GET", "path": "/model/{id}",
+            "requires": {"visibility": "public", "licensed": True},
+        },
+    }
+    errors: list[str] = []
+    validator.check_managed_resource(valid, "catalog:test", schema, errors)
+    assert errors == []
+
+    broken: list[str] = []
+    validator.check_managed_resource(
+        valid | {"operation": "update", "public_lookup": {
+            "method": "POST", "path": "/model", "requires": {},
+        }},
+        "catalog:test", schema, broken,
+    )
+    assert any("public_lookup is use-only" in error for error in broken)
+    assert any("public_lookup needs GET path" in error for error in broken)
 
 
 def test_platform_async_object_reads_cannot_silently_omit_ownership_metadata():
@@ -535,6 +660,35 @@ def test_platform_request_requires_declared_fixed_body_value(rule, valid):
     assert (not errors) is valid
 
 
+def test_tavily_rates_require_complete_positive_finite_endpoint_tables():
+    cat = catalog_store.load()
+    for endpoint_id, expected in validator.TAVILY_RATE_KEYS.items():
+        cost = cat.by_id[endpoint_id]["cost"]
+        errors = []
+        validator.check_tavily_rates(endpoint_id, cost, endpoint_id, errors)
+        assert errors == []
+        assert set(cost["tavily_rates"]) == expected
+
+    valid = cat.by_id["tavily.web.search"]["cost"]["tavily_rates"]
+    broken = [
+        None,
+        {},
+        {key: value for key, value in valid.items() if key != "advanced"},
+        valid | {"typo": 1},
+        valid | {"basic": 0},
+        valid | {"basic": -1},
+        valid | {"basic": True},
+        valid | {"basic": "1"},
+        valid | {"basic": float("nan")},
+        valid | {"basic": float("inf")},
+    ]
+    for rates in broken:
+        errors = []
+        validator.check_tavily_rates(
+            "tavily.web.search", {"tavily_rates": rates}, "test", errors)
+        assert errors
+
+
 # ---- ContactOut ----
 
 def _contactout_cost(eid):
@@ -610,6 +764,8 @@ def test_contactout_person_routes_cannot_recapture_pii():
 @pytest.mark.parametrize('display,valid', [
     ({'unit':'records','grouped':True,'round_up':True}, True),
     ({'unit':'item','variable':True}, True),
+    ({'unit':'call','maximum':True}, True),
+    ({'unit':'call','maximum':'yes'}, False),
     ({'unit':'records','round_up':True}, False),
     ({'unit':'item','variable':'yes'}, False),
     ({'unit':''}, False),
@@ -622,6 +778,20 @@ def test_generic_price_display_metadata(display, valid):
     errors = []
     validator.check_cost(cost, 'test', errors, [])
     assert (not errors) == valid
+
+
+def test_price_table_may_disclose_its_validated_maximum_only():
+    base = {'type':'per_success', 'table':[{'when':{'body.mode':'basic'}, 'value':1}],
+            'fallback':{'value':2, 'note':'documented upper bound'}, 'currency':'USD', 'unit':'call',
+            'source':'docs', 'source_url':'https://example.com', 'checked':'2026-09-21',
+            'confidence':'documented'}
+    input_schema = {'body': {'mode': {'type':'string', 'required':True, 'enum':['basic']}}}
+    errors = []
+    validator.check_cost(base | {'display':{'unit':'call', 'maximum':True}}, 'test', errors, [], input_schema)
+    assert not errors
+    errors = []
+    validator.check_cost(base | {'display':{'unit':'call'}}, 'test', errors, [], input_schema)
+    assert any('table maximum' in error for error in errors)
 
 
 @pytest.mark.parametrize('patch,valid', [
@@ -648,6 +818,20 @@ def test_strict_body_contract_validation(patch, valid):
           'input': {'body': {'items': {'type': 'array[object]', 'min': 1, 'max': 1}}}}
     errors = []
     validator.check_strict_body(ep | patch, 'example', errors)
+    assert bool(errors) is not valid
+
+
+@pytest.mark.parametrize('patch,valid', [
+    ({}, True),
+    ({'body_allowlist': 'yes'}, False),
+    ({'method': 'GET'}, False),
+    ({'input': {'body': {}}}, False),
+])
+def test_body_allowlist_contract_validation(patch, valid):
+    ep = {'body_allowlist': True, 'method': 'POST', 'path': '/lookup',
+          'input': {'body': {'domain': {'type': 'string', 'required': True}}}}
+    errors = []
+    validator.check_body_allowlist(ep | patch, 'example', errors)
     assert bool(errors) is not valid
 
 

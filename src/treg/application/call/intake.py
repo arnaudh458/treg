@@ -152,7 +152,8 @@ async def prepare_call_intake(
     # sees exactly today's behaviour.
     # Scoped by the primary tag: two of a builder's users WILL both send `retry-1`, and without
     # this the second would be served the first's stored response.
-    key = _scoped_idempotency_key(_idempotency_key(idempotency_header), meta)
+    key = _scoped_idempotency_key(
+        _idempotency_key(idempotency_header), meta, pinned_tags=caller.membership.pinned_tags)
     if not key:
         return IntakeResult("", "", None, None)
 

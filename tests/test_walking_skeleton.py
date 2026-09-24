@@ -118,12 +118,12 @@ def test_the_pool_cannot_outnumber_postgres_during_a_deploy():
     no bug anywhere, which is exactly what happened on 2026-08-15. Two instances of the current
     numbers must stay comfortably under a 97-connection ceiling.
 
-    Counts EVERY pool, not just the API's: splitting one pool into three is a fine way to protect
+    Counts EVERY primary pool, not just the API's: splitting one pool into three is a fine way to protect
     the API and a fine way to walk back into this outage, and only the sum tells the two apart."""
     from treg.infra import db
 
     assert db.POOL_SPECS, "expected explicit pool bounds for the postgres path"
-    per_instance = sum(s["pool_size"] + s["max_overflow"] for s in db.POOL_SPECS.values())
+    per_instance = db.connection_budget(workers=1)["per_instance"]
     assert per_instance * 2 <= 90, (
         f"two deploy-time instances could hold {per_instance * 2} connections — "
         "that is how the 2026-08-15 outage started")

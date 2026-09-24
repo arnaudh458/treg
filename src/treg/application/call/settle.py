@@ -59,6 +59,10 @@ def _platform_billable(status_code: int, cost_type: str) -> bool:
                                    `per_result`/`per_success` a rejected request produced nothing.
       5xx / 3xx / network error  → no. An upstream failure is never billed to the caller.
     """
+    # 204 carries no result. For success-priced tools it is the provider's standard free-miss
+    # signal (including Adyntel); treating it as a paid success would settle the full estimate.
+    if status_code == 204 and cost_type == "per_success":
+        return False
     if 200 <= status_code < 300:
         return True
     if 400 <= status_code < 500:
@@ -133,6 +137,61 @@ def _openmart_record_count(endpoint_id: str, doc: object) -> int | None:
     ):
         return sum(item is not None for item in doc.values()) if isinstance(doc, dict) else None
     return None
+
+
+def _tavily_result_count(endpoint_id: str, doc: object) -> int | None:
+    """Count only Tavily's documented successful result shapes."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("results"), list):
+        return None
+    results = doc["results"]
+    if endpoint_id == "tavily.web.map":
+        return len(results) if all(isinstance(item, str) and item.strip() for item in results) else None
+    if endpoint_id in ("tavily.web.extract", "tavily.web.crawl"):
+        valid = all(
+            isinstance(item, dict)
+            and isinstance(item.get("url"), str)
+            and bool(item["url"].strip())
+            for item in results
+        )
+        return len(results) if valid else None
+    return None
+
+
+def _tavily_requested_result_limit(mk: MarketplaceCall) -> int:
+    """The request-bound maximum frozen before relay; malformed evidence keeps the 20-page cap."""
+    request = mk.request_data.get("body") if isinstance(mk.request_data, dict) else None
+    request = request if isinstance(request, dict) else {}
+    if mk.endpoint_id == "tavily.web.extract":
+        urls = request.get("urls")
+        if isinstance(urls, list) and urls:
+            return min(len(urls), 20)
+    elif mk.endpoint_id in ("tavily.web.map", "tavily.web.crawl"):
+        limit = request.get("limit")
+        if type(limit) is int and 1 <= limit <= 20:
+            return limit
+    return 20
+
+
+def _tavily_cost_micro(mk: MarketplaceCall, doc: object) -> int | None:
+    """Settle Search from per-request usage and other Tavily tools from returned successes."""
+    if not isinstance(doc, dict) or mk.unit_micro <= 0:
+        return None
+    if mk.endpoint_id == "tavily.web.search":
+        usage = doc.get("usage")
+        amount = usage.get("credits") if isinstance(usage, dict) else None
+        if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+            try:
+                credits = Decimal(str(amount))
+                if credits.is_finite() and credits >= 0:
+                    return int((credits * mk.unit_micro).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP))
+            except (InvalidOperation, ValueError, OverflowError):
+                pass
+        return None
+    count = _tavily_result_count(mk.endpoint_id, doc)
+    if count is None:
+        return None
+    return min(count, _tavily_requested_result_limit(mk)) * mk.unit_micro
 
 
 def _quickenrich_cost_micro(mk: MarketplaceCall, doc: dict) -> int | None:
@@ -318,6 +377,10 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
     if provider == "openmart" and mk.cost_type == "per_result" and mk.unit_micro > 0:
         records = _openmart_record_count(mk.endpoint_id, doc)
         return None if records is None else _openmart_credits(records) * mk.unit_micro
+    if provider == "tavily":
+        # Extract, Map and Crawl intentionally ignore account-grouped usage.credits. Their unit
+        # was frozen from the caller's request mode and only this response's valid results count.
+        return _tavily_cost_micro(mk, doc)
     if provider == "aviato" and mk.endpoint_id == "aviato.people.enrich.bulk":
         if isinstance(doc, list) and mk.unit_micro > 0:
             return sum(item is not None for item in doc) * mk.unit_micro
@@ -329,9 +392,10 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
         amount = _dig(doc, reported["path"])
         if isinstance(amount, (int, float, str)) and not isinstance(amount, bool):
             try:
-                dollars = Decimal(str(amount))
-                if dollars.is_finite() and dollars >= 0:
-                    return int((dollars * 1_000_000).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                value = Decimal(str(amount))
+                if value.is_finite() and value >= 0:
+                    return int((value * 1_000_000).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP))
             except (InvalidOperation, ValueError, OverflowError):
                 pass
         # Missing or invalid charge evidence leaves the normal miss/base rules in force.

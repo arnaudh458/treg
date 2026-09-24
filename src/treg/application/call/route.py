@@ -38,6 +38,7 @@ from ...domain.catalog.routing.contracts import canonical_identity, declared_mis
 from ...domain.catalog.routing.plan import (
     MAX_ERROR_FALLBACKS, Candidate, Plan, candidates_for, cost_at, ignored_filters, rank,
 )
+from .intake import _tag_telemetry
 from .resolve import _anonymous_offer, _host_of, _marketplace_secret
 from .settle import close_deferred
 from .types import CallContext, CallFailure, GatewayFailed, ResolutionFailed, UpstreamResponse
@@ -679,8 +680,11 @@ def _audit_parent(parent: CallContext, ep: dict, status: int, charged: int, clie
                       status_code=status, client=client,
                       api_key_id=c.api_key_id, api_key_name=c.api_key_name,
                       api_key_prefix=c.api_key_prefix,
+                      # The tag columns too: a pinned caller's history is filtered on them, so a
+                      # routed parent row without its pin would hide the caller's own call.
                       telemetry={"call_ref": parent.call_ref, "endpoint_id": ep["id"], "provider": "treg",
-                                 "credential_tier": "routed", "cost_charged_micro": charged})
+                                 "credential_tier": "routed", "cost_charged_micro": charged,
+                                 **_tag_telemetry(parent.meta)})
 
 
 def _json(value, status: int, headers: dict[str, str]) -> UpstreamResponse:

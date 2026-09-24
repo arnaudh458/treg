@@ -25,10 +25,13 @@ _BLAME_BY_KIND: dict[str, Blame] = {
     "hub_run_failed": "upstream",
     "hub_busy": "caller",
     "hub_price_unaffordable": "caller",
+    "unknown_endpoint": "caller",
     "target_ambiguous": "caller",
     "catalog_retired": "caller",
     "catalog_parameter_invalid": "caller",
     "async_resource_not_owned": "caller",
+    "provider_resource_not_owned": "caller",
+    "provider_resource_state_failed": "treg",
     "capability_pinned": "caller",
     "policy_denied": "caller",
     "daily_cap_reached": "caller",
@@ -36,6 +39,7 @@ _BLAME_BY_KIND: dict[str, Blame] = {
     "trial_allowance_unavailable": "treg",
     "trial_allowance_reached": "caller",
     "platform_cap_unavailable": "treg",
+    "catalog_price_invalid": "treg",
     "platform_daily_cap_reached": "caller",
     "tag_budget_unavailable": "treg",
     "tag_cardinality_exceeded": "caller",
@@ -263,6 +267,10 @@ class UpstreamRequest:
     query_items: tuple[tuple[str, str], ...]
     body_stream: Callable[[], AsyncIterator[bytes]]
     has_body: bool
+    # JSON credential bindings are the one body rewrite the relay permits. HTTP callers expose a
+    # cached read so that provider explicitly opting into that shape can inject without consuming
+    # the stream twice; ordinary header/query providers leave this unset and keep streaming.
+    body_read: Callable[[], Awaitable[bytes]] | None = None
 
 
 @dataclass(frozen=True)

@@ -47,20 +47,28 @@ def test_every_provider_is_registered():
         "google-ads", "youtube", "linkedin", "slack", "x", "tiktok",
         "facebook", "instagram", "meta-ads",
         # API-key providers (auth_kind="key")
-        "anyapi", "apollo", "pdl", "akta", "hunter", "sumble", "moltsets", "openmart", "harvestapi", "dropleads", "quickenrich", "prospeo", "aiark", "wiza", "limadata", "getleadsio", "scrubby", "zerobounce", "datagma", "contactout", "millionverifier", "bounceban", "trykitt", "crunchbase", "tikhub", "brightdata", "semrush", "justoneapi",
+        "adyntel", "anyapi", "apollo", "pdl", "akta", "hunter", "sumble", "moltsets", "openmart", "harvestapi", "dropleads", "quickenrich", "prospeo", "aiark", "wiza", "limadata", "getleadsio", "scrubby", "zerobounce", "datagma", "contactout", "millionverifier", "bounceban", "trykitt", "crunchbase", "tikhub", "brightdata", "semrush", "justoneapi",
         "scrapecreators",
-        "dataforseo", "seranking", "moz", "majestic", "serpstat", "exa",
+        "dataforseo", "seranking", "moz", "majestic", "serpstat", "exa", "tavily", "keenable", "olostep",
         "cloro",
         "lusha", "coresignal", "diffbot", "thecompaniesapi", "leadmagic", "fiber-ai",
-        "companyenrich", "oceanio", "tomba", "predictleads", "findymail", "branddev",
+        "companyenrich", "oceanio", "tomba", "trestleiq", "predictleads", "findymail", "branddev",
         "icypeas", "leadsforge", "influencersclub", "crustdata", "aviato",
         "spyfu", "apify", "meta-ad-library", "serpapi",
         "coingecko", "polygon", "finnhub", "twelvedata", "fmp", "eodhd", "marketstack", "tiingo",
         "financialdatasets",
         "microsoft-ads", "snapchat-ads", "tiktok-ads", "pinterest-ads",
         # BYOK token providers
-        "minimax", "openrouter", "replicate", "reapi", "piapi",
+        "minimax", "fishaudio", "openrouter", "replicate", "reapi", "piapi", "tinyfish",
     }
+
+
+def test_tavily_uses_bearer_auth_and_the_internal_usage_probe():
+    provider = P.REGISTRY["tavily"]
+    assert provider.base_url == "https://api.tavily.com"
+    assert provider.token_header == "Authorization"
+    assert provider.token_format == "Bearer {secret}"
+    assert provider.probe_path == "/usage"
 
 
 def test_default_capability_is_the_broadest():

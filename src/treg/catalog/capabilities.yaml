@@ -12,7 +12,7 @@
 platforms:
   # --- SEO: search engines & the open web ------------------------------------------------------
   google: {label: "Google Keyword Data", category: "SEO/AEO", featured: 1, summary: "Organic rankings, keyword volume and full SERP data from Google."}
-  web: {label: "Backlinks, authority & domain metrics", category: "SEO/AEO", featured: 2, summary: "Backlinks, referring domains, anchors and authority metrics for any site."}
+  web: {label: "Open web & SEO data", category: "SEO/AEO", featured: 2, summary: "Search, extract and crawl the open web, plus backlinks, referring domains and authority metrics."}
   search-console: {label: "Google Search Console", category: "SEO/AEO", featured: 3, summary: "Your site's Google Search clicks, impressions, top queries and indexing."}
   google-analytics: {label: "Google Analytics (GA4)", category: "SEO/AEO", featured: 4, summary: "Traffic and behavior reports from your own GA4 properties, including realtime visitors."}
   bing: {label: "Bing Keyword Data", category: "SEO/AEO", summary: "Organic results and rankings from Bing."}
@@ -140,6 +140,7 @@ capabilities:
   image-gen.from_text: "Generate an image from a text prompt"
   image-gen.edit: "Edit or restyle an image with a prompt"
   voice-gen.from_text: "Generate speech from text"
+  voice-gen.voices.list: "List available voices"
 
   creators.search: "Find influencers & creators by niche, country, followers & engagement on Instagram, TikTok, YouTube"
   # --- SEO / search -----------------------------------------------------------------------------
@@ -165,6 +166,10 @@ capabilities:
   web.global.top_pages: "Most-linked pages on the web (index-wide)"
   web.global.top_domains: "Most-linked domains on the web (index-wide)"
   web.page.audit: "Run an on-page audit of a URL"
+  web.search: "Search the open web by meaning or keyword"
+  web.extract: "Extract clean content from web pages"
+  web.map: "Discover the URLs on a website"
+  web.crawl: "Crawl a website and extract its pages"
 
   # --- Social -----------------------------------------------------------------------------------
   tiktok.user.profile: "Get a user's public profile"

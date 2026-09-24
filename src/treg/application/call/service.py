@@ -8,11 +8,11 @@ import logging
 import time
 import uuid
 from types import SimpleNamespace
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import httpx
 
-from ... import analytics, archive, audit, oauth
+from ... import analytics, archive, audit, oauth, oauth_providers
 from ...application import hub as hub_app
 from ...application.hub import runner as hub_runner
 from ...application.hub import limits as hub_limits
@@ -20,6 +20,7 @@ from ... import sandbox as demo_sandbox
 from ...client_identity import _norm_client
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
+from ...domain import provider_resources
 from ...infra.db import session_maker
 from ...models import Secret
 from ...sandbox_identity import visitor_name
@@ -49,7 +50,10 @@ from .resolve import (
     QueryValues,
     _billed_marketplace,
     _catalog_endpoint_for,
+    _document_value,
+    _managed_values,
     _oauth_billed_provider,
+    _request_body_document,
     _resolve_call,
     resolve_call_target,
     resolve_marketplace_target,
@@ -307,6 +311,66 @@ async def _drain(response: UpstreamResponse) -> bytes:
     return body
 
 
+async def _verify_public_managed_resources(
+    mk: MarketplaceCall, secrets: dict, upstream_client: httpx.AsyncClient,
+) -> None:
+    """Authorize shared-key public resources without exposing another org's private ids."""
+    lookup = (mk.managed_resource or {}).get("public_lookup") or {}
+    if not mk.public_resource_ids or not lookup:
+        return
+    for upstream_id in mk.public_resource_ids:
+        path = str(lookup["path"]).replace("{id}", quote(upstream_id, safe=""))
+        upstream_url = f"{mk.tool.base_url.rstrip('/')}{path}"
+        try:
+            response = await relay(
+                UpstreamRequest(
+                    method="GET", raw_headers=(), query_items=(),
+                    body_stream=_empty_body, has_body=False,
+                ),
+                upstream_url,
+                mk.tool,
+                secrets,
+                upstream_client,
+                force_identity=True,
+            )
+            chunks: list[bytes] = []
+            size = 0
+            try:
+                async for chunk in response.body_stream:
+                    size += len(chunk)
+                    if size > 256 * 1024:
+                        raise ValueError("public resource response too large")
+                    chunks.append(chunk)
+            finally:
+                await response.close()
+        except (httpx.RequestError, ValueError) as exc:
+            raise GatewayFailed(
+                "upstream_failed", status_code=502,
+                detail="provider public-resource verification failed",
+            ) from exc
+        if response.status not in (200, 403, 404):
+            raise GatewayFailed(
+                "upstream_failed", status_code=502,
+                detail="provider public-resource verification failed",
+            )
+        try:
+            document = json.loads(b"".join(chunks)) if response.status == 200 else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise GatewayFailed(
+                "upstream_failed", status_code=502,
+                detail="provider public-resource verification failed",
+            )
+        required = lookup.get("requires") or {}
+        if (not isinstance(document, dict)
+                or any(_document_value(document, key) != value
+                       for key, value in required.items())):
+            raise AuthorizationFailed(
+                "provider_resource_not_owned", status_code=403,
+                detail={"error": "provider_resource_not_owned",
+                        "message": "resource is not owned by this organization"},
+            )
+
+
 def _bytes_response(
     content: bytes, status_code: int = 200, media_type: str = "",
     headers: dict[str, str] | None = None,
@@ -317,6 +381,128 @@ def _bytes_response(
     raw.extend((name.lower().encode("latin-1"), value.encode("latin-1"))
                for name, value in (headers or {}).items())
     return UpstreamResponse(status_code, tuple(raw), _one_chunk(content), _closed)
+
+
+async def _compensate_managed_create(
+    mk: MarketplaceCall, upstream_id: str, secrets: dict, upstream_client,
+) -> bool:
+    """Best-effort delete after the provider accepted a create treg could not assign."""
+    cleanup_id = str((mk.managed_resource or {}).get("cleanup_endpoint") or "")
+    cleanup = catalog_store.load().by_id.get(cleanup_id)
+    provider = oauth_providers.get(mk.provider)
+    if not cleanup or provider is None:
+        return False
+    url = provider.base_url.rstrip("/") + "/" + str(cleanup["path"]).lstrip("/")
+    url = url.replace("{id}", quote(upstream_id, safe=""))
+    request = UpstreamRequest(
+        method="DELETE", raw_headers=(), query_items=(), body_stream=_empty_body,
+        has_body=False,
+    )
+    try:
+        response = await relay(request, url, mk.tool, secrets, upstream_client, force_identity=True)
+        await _drain(response)
+        await response.close()
+        return response.status in (200, 202, 204, 404)
+    except Exception:  # noqa: BLE001 - original persistence failure remains authoritative
+        return False
+
+
+async def _apply_managed_resource_result(
+    mk: MarketplaceCall, *, caller, call_ref: str, status: int, response_body: bytes,
+    request_body: bytes, request_headers, query: QueryValues, secrets: dict, upstream_client,
+) -> None:
+    """Commit shared-account lifecycle state only after the provider has answered."""
+    rule = mk.managed_resource or {}
+    operation = rule.get("operation")
+    if not operation:
+        return
+    successful = 200 <= status < 300
+    endpoint = _catalog_endpoint_for(mk.endpoint_id) or {"id": mk.endpoint_id}
+    if operation == "create":
+        if not successful:
+            return
+        try:
+            document = json.loads(response_body)
+            upstream_id = _document_value(
+                document, str((rule.get("id") or {}).get("path") or ""))
+        except (ValueError, UnicodeDecodeError):
+            upstream_id = None
+        if not isinstance(upstream_id, str) or not upstream_id.strip():
+            raise GatewayFailed(
+                "provider_resource_state_failed", status_code=502,
+                detail="provider created a resource without returning its id",
+            )
+        upstream_id = upstream_id.strip()
+        name_rule = rule.get("name_from") or {}
+        display_name = ""
+        if name_rule:
+            request_document = _request_body_document(
+                endpoint, request_body, request_headers)
+            found = _document_value(request_document, str(name_rule.get("path") or ""))
+            display_name = found if isinstance(found, str) else ""
+        try:
+            async with session_maker() as resource_db:
+                await provider_resources.register(
+                    resource_db, org_id=caller.org_id, provider=mk.provider,
+                    resource_kind=str(rule.get("kind") or ""), upstream_id=upstream_id,
+                    display_name=display_name, created_by=caller.email,
+                    source_call_id=call_ref,
+                )
+                await resource_db.commit()
+        except provider_resources.ResourceCollision as exc:
+            logging.getLogger("treg.provider_resources").error(
+                "PLATFORM RESOURCE COLLISION: %s %s already belongs to another org",
+                mk.provider, upstream_id,
+            )
+            raise GatewayFailed(
+                "provider_resource_state_failed", status_code=502,
+                detail="provider resource ownership could not be established",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - compensate outside the failed transaction
+            cleaned = await _compensate_managed_create(
+                mk, upstream_id, secrets, upstream_client)
+            logging.getLogger("treg.provider_resources").error(
+                "PLATFORM RESOURCE NOT RECORDED: %s %s; compensation_deleted=%s",
+                mk.provider, upstream_id, cleaned, exc_info=True,
+            )
+            raise GatewayFailed(
+                "provider_resource_state_failed", status_code=502,
+                detail="provider resource could not be recorded; the platform attempted cleanup",
+            ) from exc
+        return
+
+    if not successful and not (operation == "delete" and status == 404):
+        return
+    ids = _managed_values(endpoint, rule, query, request_body, request_headers)
+    public_ids = set(mk.public_resource_ids)
+    try:
+        async with session_maker() as resource_db:
+            for upstream_id in ids:
+                # Public ids were verified against the provider before the main call and have no
+                # local lifecycle row to update. Owned ids retain the post-call consistency check.
+                if operation == "use" and upstream_id in public_ids:
+                    continue
+                row = await provider_resources.owned(
+                    resource_db, caller.org_id, mk.provider, str(rule.get("kind") or ""),
+                    upstream_id, include_deleted=operation == "delete",
+                )
+                if row is None:
+                    raise RuntimeError("authorized provider resource disappeared")
+                if operation == "delete":
+                    provider_resources.tombstone(row)
+                elif operation == "update":
+                    name_rule = rule.get("name_from") or {}
+                    if name_rule:
+                        document = _request_body_document(endpoint, request_body, request_headers)
+                        name = _document_value(document, str(name_rule.get("path") or ""))
+                        if isinstance(name, str) and name.strip():
+                            provider_resources.rename(row, name)
+            await resource_db.commit()
+    except Exception as exc:  # noqa: BLE001 - upstream succeeded but local lifecycle did not
+        raise GatewayFailed(
+            "provider_resource_state_failed", status_code=502,
+            detail="provider resource state could not be updated; retry the request",
+        ) from exc
 
 
 def _json_response(value) -> UpstreamResponse:
@@ -562,6 +748,7 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 read_body=request.body,
                 caller=caller,
                 resolve_call=_resolve_call,
+                request_headers=request.headers,
                 authorization_method=request.headers.get(AUTHORIZATION_METHOD_HEADER, ""),
             ), request, call_ref)
         except CallFailure as mkexc:
@@ -806,6 +993,17 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
 
     if mk is not None:
         mk.deferred = request.context.deferred_settles
+    if mk is not None and mk.tier == "platform" and mk.public_resource_ids:
+        # Resolution already proved these ids are absent from every org's durable assignments.
+        # End the DB phase before asking the provider whether each is an approved public resource.
+        await db.commit()
+        try:
+            await _await_before_reserve(
+                _verify_public_managed_resources(mk, secrets, upstream_client), request, call_ref)
+        except CallFailure as exc:
+            _audit(exc.status_code, refused_by=_refusal_kind(exc.status_code), answered=False)
+            raise
+
     if mk is not None and mk.metered:
         _set_caller_max_cost(request, mk)
 
@@ -927,13 +1125,15 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 # Rewrite 4 of the relay's faithfulness contract: every org shares ONE provider
                 # account here, so a caller's Idempotency-Key must be partitioned by org before it
                 # reaches a provider that honors it (relay.py explains the leak it closes).
-                raw_headers = scope_shared_idempotency_key(raw_headers, caller.org_id)
+                raw_headers = scope_shared_idempotency_key(
+                    raw_headers, caller.org_id, pinned_tags=caller.membership.pinned_tags)
             upstream_request = UpstreamRequest(
                 method=request.method,
                 raw_headers=raw_headers,
                 query_items=tuple(request.query_params.multi_items()),
                 body_stream=request.stream,
                 has_body=request.has_body,
+                body_read=request.body,
             )
             if platform_tier:
                 # Burst smoothing, half one (plan §4.4): many callers share treg's key, so a call that
@@ -1041,11 +1241,19 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
                 if mk.resource_ownership and 200 <= response.status < 300:
                     try:
                         await async_task_app.remember_platform_resources(
-                            caller.org_id, mk.provider, call_ref, mk.resource_ownership, body)
+                            caller.org_id, mk.provider, call_ref, mk.resource_ownership, body,
+                            tags=meta.tags)
                     except Exception:  # noqa: BLE001 - failure keeps later access fail-closed
                         logging.getLogger("treg.asynctasks").warning(
                             "could not persist async resource ownership for %s", call_ref,
                             exc_info=True)
+                if mk.managed_resource:
+                    await _apply_managed_resource_result(
+                        mk, caller=caller, call_ref=call_ref, status=response.status,
+                        response_body=body, request_body=caller_body,
+                        request_headers=request.headers, query=request.query_params,
+                        secrets=secrets, upstream_client=upstream_client,
+                    )
                 # The archive's recorder (docs/context/architecture/archive.md): the body is already
                 # in memory here for the settle, so observing it costs nothing on-request. Metered
                 # 2xx only — gate 3 of eligibility is exactly 'this fact, at this line'. Off unless
@@ -1175,7 +1383,8 @@ async def _execute_call(request: _ApplicationRequest, upstream_client: httpx.Asy
             request.context.finalization = FinalizationState.FINALIZING
             if deferred:
                 try:
-                    charged = await async_task_app.defer_submission(mk, body, caller.org_id)
+                    charged = await async_task_app.defer_submission(
+                        mk, body, caller.org_id, tags=meta.tags)
                     observed = None
                     request.context.finalization = FinalizationState.FINALIZED
                 except Exception as exc:  # noqa: BLE001 - an accepted task must never orphan a hold

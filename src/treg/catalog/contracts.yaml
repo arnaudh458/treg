@@ -1094,3 +1094,91 @@ contracts:
       count: {type: int}
     miss: "videos == []"
     idempotent: true
+
+  # ---- open web -----------------------------------------------------------------------------
+  web.search:
+    summary: "Search the open web — provider-native result rows in `results`"
+    identity:
+      - {q: str}
+    filters:
+      limit: {type: int, default: 10, note: "maximum results, where the provider accepts one"}
+    output:
+      results: {type: list, required: true, note: "the provider's own ranked result objects; raw is the same body"}
+      count: {type: int}
+    miss: "results == []"
+    idempotent: true
+
+  web.extract:
+    summary: "Extract clean content from one web page — provider-native rows in `pages`"
+    identity:
+      - {url: url}
+    filters: {}
+    output:
+      pages: {type: list, required: true, note: "the provider's own extracted page objects; raw is the same body"}
+      count: {type: int}
+    miss: "pages == []"
+    idempotent: true
+
+  web.map:
+    summary: "Discover the URLs on a website — provider-native map rows in `results`"
+    identity:
+      - {url: url}
+      - {url: url, q: str}
+    filters:
+      limit: {type: int, default: 10, note: "maximum discovered URLs"}
+    output:
+      results: {type: list, required: true, note: "URL strings or provider-native URL objects; raw is the same body"}
+      count: {type: int}
+    miss: "results == []"
+    idempotent: true
+
+  web.crawl:
+    summary: "Crawl a website and return clean page content — provider-native rows in `pages`"
+    identity:
+      - {url: url}
+    filters:
+      limit: {type: int, default: 10, note: "maximum crawled pages"}
+    output:
+      pages: {type: list, required: true, note: "the provider's own crawled page objects; raw is the same body"}
+      count: {type: int}
+    miss: "pages == []"
+    idempotent: true
+
+  # ---- influencers.club creator enrichment: admission only. `routed: false` because raw / profile
+  # / full are ONE provider at three prices, not three providers to choose between.
+  creators.profile:
+    summary: "A creator's profile by social handle — influencers.club raw/profile/full tiers; cache result admission only, never routed"
+    identity:
+      - {handle: str, platform: str}
+    filters: {}
+    output:
+      profile: {type: dict, required: true, note: "the platform block (`result.<platform>`) — a creator the provider knows"}
+    miss: "profile == null"
+    idempotent: true
+    routed: false
+
+  creators.analytics:
+    summary: "A creator's performance analytics by social handle — influencers.club analytics tier; cache result admission only, never routed"
+    identity:
+      - {handle: str, platform: str}
+    filters: {}
+    output:
+      analytics: {type: dict, required: true, note: "the platform block (`result.<platform>`) — a creator the provider knows"}
+    miss: "analytics == null"
+    idempotent: true
+    routed: false
+
+  creators.enrich.by_email:
+    summary: "The creator behind an email address — influencers.club reverse lookup; cache result admission only, never routed"
+    identity:
+      - {email: str}
+    filters: {}
+    output:
+      platform: {type: str, required: true, note: "the creator's strongest platform — a creator the provider knows"}
+      username: {type: str}
+      url: {type: str}
+      full_name: {type: str}
+      followers: {type: int}
+    miss: "platform == null"
+    idempotent: true
+    routed: false

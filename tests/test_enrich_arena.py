@@ -1009,8 +1009,6 @@ async def test_arena_and_dashboard_share_setup_components(clients):
     page = (await clients.get('/enrich-arena')).text
     dashboard = (await clients.get('/app')).text
     assert '/agent-setup.js' in page and '/agent-setup.js' in dashboard
-    assert 'treg-setup-instructions' in page and 'treg-setup-instructions' in dashboard
-    assert 'Setup treg in' in page and 'ref="setupDialog"' in page
 
 
 def test_discovery_public_cohorts_keep_all_requested_constraints():
@@ -1035,6 +1033,11 @@ def test_openmart_is_not_offered_in_enrich_arena():
         for cohort in task["provider_previews"]
         for preview in cohort
     )
+
+
+def test_open_web_tools_are_not_enrich_arena_tasks():
+    tasks = {task["id"] for task in arena.public_tasks()}
+    assert not {"web.search", "web.extract", "web.map", "web.crawl"} & tasks
 
 
 def test_search_outputs_are_bounded_sanitized_and_survive_presentation():

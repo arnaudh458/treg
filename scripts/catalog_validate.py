@@ -83,7 +83,7 @@ ASYNC_PARAM_LOCATIONS = {"pathParams", "queryParams"}
 JSON_PATH = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+)(?:\.(?:[A-Za-z_][A-Za-z0-9_-]*|[0-9]+))*")
 # Only the unit real traffic has settled (OpenRouter's `usage.cost` in dollars). A token unit
 # returns with the first metered token-priced listing, together with its fx rule and a live test.
-USAGE_UNITS = {"usd", "credit"}  # credit: the provider's fx.yaml credit_rates_usd rate
+USAGE_UNITS = {"usd", "credit"}  # plus provider-native meters declared in unit_rates_usd
 # the section heading an endpoint files under on its platform page — one lowercase word
 DOMAIN = re.compile(r"[a-z][a-z0-9_]*")
 HOST = re.compile(
@@ -165,7 +165,7 @@ def _input_fields(input_schema: object) -> dict[str, dict]:
     if not isinstance(input_schema, dict):
         return {}
     fields: dict[str, dict] = {}
-    for location in ("pathParams", "queryParams", "body"):
+    for location in ("pathParams", "queryParams", "headers", "body"):
         block = input_schema.get(location)
         if not isinstance(block, dict):
             continue
@@ -238,22 +238,57 @@ def check_strict_body(ep: dict, where: str, errors: list[str]) -> None:
             fail(errors, where, "strict_body array fields require valid integer min/max bounds")
 
 
+def check_body_allowlist(ep: dict, where: str, errors: list[str]) -> None:
+    if "body_allowlist" not in ep:
+        return
+    fields = (ep.get("input") or {}).get("body")
+    if ep["body_allowlist"] is not True:
+        fail(errors, where, "body_allowlist must be true when present")
+    elif ep.get("method") not in {"POST", "PUT", "PATCH"} or not isinstance(fields, dict) or not fields:
+        fail(errors, where, "body_allowlist requires a body method with declared body fields")
+
+
 def check_platform_request(rule: object, input_schema: object, where: str,
                            errors: list[str]) -> None:
-    """Platform-only fixed body values; BYOK input remains an upstream contract."""
+    """Platform-only fixed request values; BYOK input remains an upstream contract."""
     if not isinstance(rule, dict) or not rule:
         fail(errors, where, "platform_request must be a non-empty mapping")
         return
     fields = _input_fields(input_schema)
     for path, value in rule.items():
         spec = fields.get(path) if isinstance(path, str) else None
-        if not isinstance(path, str) or not path.startswith("body.") or spec is None:
-            fail(errors, where, "platform_request must name a declared body field")
+        if (not isinstance(path, str)
+                or not path.startswith(("body.", "headers.")) or spec is None):
+            fail(errors, where, "platform_request must name a declared body or header field")
             continue
         allowed = spec.get("enum")
         if (not isinstance(allowed, list) or len(allowed) != 1
                 or type(value) is not type(allowed[0]) or value != allowed[0]):
             fail(errors, where, "platform_request value must match the field's singleton enum")
+
+
+TAVILY_RATE_KEYS = {
+    "tavily.web.search": {"basic", "fast", "ultra_fast", "advanced"},
+    "tavily.web.extract": {"basic", "advanced"},
+    "tavily.web.map": {"regular", "instructions"},
+    "tavily.web.crawl": {
+        "basic", "basic_instructions", "advanced", "advanced_instructions",
+    },
+}
+
+
+def check_tavily_rates(endpoint_id: str, cost: dict, where: str,
+                        errors: list[str]) -> None:
+    """Tavily's provider-specific formulas require a complete positive finite mode table."""
+    expected = TAVILY_RATE_KEYS.get(endpoint_id)
+    if expected is None:
+        return
+    rates = cost.get("tavily_rates")
+    if not isinstance(rates, dict) or set(rates) != expected:
+        fail(errors, where, "cost.tavily_rates must contain exactly " + ", ".join(sorted(expected)))
+        return
+    if any(not _finite_number(value) or value <= 0 for value in rates.values()):
+        fail(errors, where, "cost.tavily_rates values must be positive finite numbers")
 
 
 def check_platform_auth(ep: dict, where: str, errors: list[str]) -> None:
@@ -387,11 +422,15 @@ def check_cost_table(cost: dict, input_schema: object, where: str, errors: list[
     if settle == "usage":
         if not isinstance(usage, dict) or set(usage) != {"path", "unit"} \
                 or not isinstance(usage.get("path"), str) or not JSON_PATH.fullmatch(usage["path"]) \
-                or usage.get("unit") not in USAGE_UNITS:
+                or not isinstance(usage.get("unit"), str) or not usage["unit"].strip():
             fail(errors, where, "cost.settle 'usage' requires usage.path and usage.unit")
         elif usage.get("unit") == "credit" and not _finite_number(_credit_rate(provider)):
             fail(errors, where, f"usage.unit 'credit' needs a numeric fx.yaml credit_rates_usd entry "
                                 f"for '{provider}'")
+        elif usage.get("unit") not in USAGE_UNITS \
+                and not _finite_number(_unit_rate(provider, usage.get("unit"))):
+            fail(errors, where, f"usage.unit '{usage.get('unit')}' needs a numeric "
+                                f"fx.yaml unit_rates_usd entry for '{provider}'")
     elif usage is not None:
         fail(errors, where, "cost.usage is only valid with settle: usage")
 
@@ -474,20 +513,30 @@ def check_async_descriptor(descriptor: object, where: str, provider: str,
     if not isinstance(status, dict):
         fail(errors, where, "async.status must be a mapping")
     else:
-        if set(status) != {"path", "success", "failure"}:
-            fail(errors, where, "async.status requires exactly path, success, and failure")
+        if set(status) - {"path", "progress", "success", "failure", "billed_failure"} \
+                or not {"path", "success", "failure"}.issubset(status):
+            fail(errors, where, "async.status requires path, success, failure, and optionally progress and billed_failure")
         if not isinstance(status.get("path"), str) or not JSON_PATH.fullmatch(status["path"]):
             fail(errors, where, "async.status.path must be a dotted JSON path")
         success, failure = status.get("success"), status.get("failure")
-        for name, values in (("success", success), ("failure", failure)):
-            if not isinstance(values, list) or not values:
+        progress, billed_failure = status.get("progress"), status.get("billed_failure")
+        for name, values in (("progress", progress), ("success", success), ("failure", failure),
+                             ("billed_failure", billed_failure)):
+            if name in {"progress", "billed_failure"} and values is None:
+                continue
+            if not isinstance(values, list) or (name == "success" and not values) \
+                    or (name in {"progress", "billed_failure"} and not values):
                 fail(errors, where, f"async.status.{name} must be a non-empty list")
             elif any(isinstance(value, (dict, list, bool)) or value is None
                      or not str(value).strip() for value in values):
                 fail(errors, where, f"async.status.{name} values must be non-empty strings or numbers")
-        if isinstance(success, list) and isinstance(failure, list) \
-                and {str(value) for value in success} & {str(value) for value in failure}:
-            fail(errors, where, "async.status.success and failure must not overlap")
+        groups = [values for values in (progress, success, failure, billed_failure)
+                  if isinstance(values, list)]
+        if sum(len({str(value) for value in values}) for values in groups) != \
+                len(set().union(*({str(value) for value in values} for values in groups))):
+            fail(errors, where, "async.status groups must not overlap")
+        if isinstance(failure, list) and not failure and not billed_failure:
+            fail(errors, where, "async.status needs failure or billed_failure terminal values")
 
     result = descriptor.get("result")
     if not isinstance(result, dict):
@@ -527,14 +576,17 @@ def check_resource_ownership(rule: object, where: str, input_schema: object,
         return
     required = rule.get("requires")
     if required is not None:
-        if (not isinstance(required, dict) or set(required) != {"kind", "param"}
+        if (not isinstance(required, dict) or set(required) not in ({"kind", "param"}, {"kind", "param", "in"})
                 or not all(isinstance(required.get(k), str) and required[k].strip()
-                           for k in ("kind", "param"))):
-            fail(errors, where, "resource_ownership.requires needs exactly non-empty kind and param")
+                           for k in ("kind", "param"))
+                or required.get("in", "query") not in {"query", "body"}):
+            fail(errors, where, "resource_ownership requires needs exactly kind, param, and optional in=query|body")
         else:
             fields = _input_fields(input_schema)
             name = required["param"]
-            if not any(field in fields for field in (f"pathParams.{name}", f"queryParams.{name}")):
+            locations = ((f"body.{name}",) if required.get("in") == "body"
+                         else (f"pathParams.{name}", f"queryParams.{name}"))
+            if not any(field in fields for field in locations):
                 fail(errors, where, f"resource_ownership requires undeclared parameter '{name}'")
     produced = rule.get("produces")
     if produced is not None:
@@ -549,9 +601,77 @@ def check_resource_ownership(rule: object, where: str, input_schema: object,
                     fail(errors, where, "each resource_ownership.produces item needs exactly kind and JSON path")
 
 
+def check_managed_resource(rule: object, where: str, input_schema: object,
+                           errors: list[str]) -> None:
+    """Validate long-lived shared-account resource lifecycle declarations."""
+    allowed = {"operation", "kind", "id", "name_from", "cleanup_endpoint", "public_lookup"}
+    if not isinstance(rule, dict) or set(rule) - allowed:
+        fail(errors, where, "managed_resource has unsupported fields")
+        return
+    operation = rule.get("operation")
+    if operation not in {"create", "read", "use", "update", "delete"}:
+        fail(errors, where, "managed_resource.operation must be create/read/use/update/delete")
+    if not isinstance(rule.get("kind"), str) or not rule["kind"].strip():
+        fail(errors, where, "managed_resource.kind must be non-empty")
+    locator = rule.get("id")
+    if not isinstance(locator, dict):
+        fail(errors, where, "managed_resource.id must be a mapping")
+        return
+    if set(locator) - {"in", "name", "path", "optional", "many"}:
+        fail(errors, where, "managed_resource.id has unsupported fields")
+    location = locator.get("in")
+    field = locator.get("name") or locator.get("path")
+    if location not in {"response", "pathParams", "queryParams", "body"}:
+        fail(errors, where, "managed_resource.id.in has an unsupported location")
+    if not isinstance(field, str) or not field.strip():
+        fail(errors, where, "managed_resource.id needs a non-empty name/path")
+    elif location != "response" and f"{location}.{field}" not in _input_fields(input_schema):
+        fail(errors, where, f"managed_resource id references undeclared {location}.{field}")
+    for flag in ("optional", "many"):
+        if flag in locator and type(locator[flag]) is not bool:
+            fail(errors, where, f"managed_resource.id.{flag} must be boolean")
+    if operation == "create" and location != "response":
+        fail(errors, where, "managed_resource create id must come from response")
+    if operation != "create" and location == "response":
+        fail(errors, where, "only managed_resource create may read its id from response")
+    if rule.get("cleanup_endpoint") is not None and operation != "create":
+        fail(errors, where, "managed_resource.cleanup_endpoint is create-only")
+    public_lookup = rule.get("public_lookup")
+    if public_lookup is not None:
+        if operation != "use":
+            fail(errors, where, "managed_resource.public_lookup is use-only")
+        if (not isinstance(public_lookup, dict)
+                or set(public_lookup) != {"method", "path", "requires"}
+                or public_lookup.get("method") != "GET"
+                or not isinstance(public_lookup.get("path"), str)
+                or public_lookup["path"].count("{id}") != 1
+                or not public_lookup["path"].startswith("/")
+                or not isinstance(public_lookup.get("requires"), dict)
+                or not public_lookup["requires"]):
+            fail(errors, where, "managed_resource.public_lookup needs GET path with {id} and requires")
+        elif any(not isinstance(key, str) or not key or isinstance(value, (dict, list))
+                 for key, value in public_lookup["requires"].items()):
+            fail(errors, where, "managed_resource.public_lookup requires must contain scalar fields")
+    name_from = rule.get("name_from")
+    if name_from is not None:
+        if (not isinstance(name_from, dict) or set(name_from) != {"in", "path"}
+                or name_from.get("in") != "body"
+                or not isinstance(name_from.get("path"), str)
+                or f"body.{name_from.get('path')}" not in _input_fields(input_schema)):
+            fail(errors, where, "managed_resource.name_from must reference a declared body field")
+
+
 def _credit_rate(provider: str | None) -> object:
+    """The provider credit rate used by async cost.settle: usage validation."""
     fx = yaml.safe_load((CATALOG / "fx.yaml").read_text()) or {}
     entry = (fx.get("credit_rates_usd") or {}).get(provider or "")
+    return entry.get("usd") if isinstance(entry, dict) else entry
+
+
+def _unit_rate(provider: str | None, unit: object) -> object:
+    """The provider-scoped native-meter rate used by async usage settlement."""
+    fx = yaml.safe_load((CATALOG / "fx.yaml").read_text()) or {}
+    entry = ((fx.get("unit_rates_usd") or {}).get(provider or "") or {}).get(str(unit or ""))
     return entry.get("usd") if isinstance(entry, dict) else entry
 
 
@@ -581,26 +701,27 @@ def check_cost(cost: dict, where: str, errors: list[str], warnings: list[str],
     if reported is not None:
         if (not isinstance(reported, dict) or set(reported) != {"path", "unit"}
                 or not isinstance(reported.get("path"), str)
-                or not JSON_PATH.fullmatch(reported["path"]) or reported.get("unit") != "usd"):
+                or not JSON_PATH.fullmatch(reported["path"])
+                or reported.get("unit") != "usd"):
             fail(errors, where, "cost.reported_charge requires a JSON path and unit: usd")
-        if "table" in cost or "settle" in cost or cost.get("type") == "free":
-            fail(errors, where, "cost.reported_charge requires a paid scalar price without cost.settle")
+        if "settle" in cost or cost.get("type") == "free":
+            fail(errors, where, "cost.reported_charge requires a paid price without cost.settle")
     if "display" in cost:
         display = cost["display"]
         if (not isinstance(display, dict) or not isinstance(display.get("unit"), str)
                 or not display["unit"].strip() or len(display["unit"]) > 40
-                or set(display) - {"unit", "grouped", "round_up", "variable"}):
-            fail(errors, where, "cost.display requires a short unit and optional grouped/round_up/variable flags")
+                or set(display) - {"unit", "grouped", "round_up", "variable", "maximum"}):
+            fail(errors, where, "cost.display requires a short unit and optional grouped/round_up/variable/maximum flags")
         else:
-            for flag in {"grouped", "round_up", "variable"} & set(display):
+            for flag in {"grouped", "round_up", "variable", "maximum"} & set(display):
                 if type(display[flag]) is not bool:
                     fail(errors, where, f"cost.display.{flag} must be boolean")
             if display.get("round_up") and not display.get("grouped"):
                 fail(errors, where, "cost.display.round_up requires grouped")
             if display.get("grouped") and (type(cost.get("per")) is not int or cost["per"] <= 0):
                 fail(errors, where, "cost.display.grouped requires positive integer cost.per")
-        if cost.get("type") == "free" or "table" in cost:
-            fail(errors, where, "cost.display requires a scalar paid price")
+        if cost.get("type") == "free" or ("table" in cost and not display.get("maximum")):
+            fail(errors, where, "cost.display requires a scalar paid price unless it labels a table maximum")
     if "sumble" in cost:
         rule = cost["sumble"]
         modes = {"single": set(), "results": {"reserve_results"},
@@ -964,6 +1085,7 @@ def main(argv: list[str]) -> int:
             inp = ep.get("input") or {}
             check_strict_query(ep, where, errors)
             check_strict_body(ep, where, errors)
+            check_body_allowlist(ep, where, errors)
             check_platform_auth(ep, where, errors)
             if "platform_request" in ep:
                 check_platform_request(ep["platform_request"], inp, where, errors)
@@ -981,7 +1103,9 @@ def main(argv: list[str]) -> int:
                 if not isinstance(cost, dict):
                     fail(errors, where, f"cost.type missing or not one of {sorted(COST_TYPES)}")
                 else:
-                    check_cost(cost, where, errors, warnings, inp, provider)
+                    check_cost(cost, where, errors, warnings, inp, service)
+                    if service == "tavily":
+                        check_tavily_rates(eid, cost, where, errors)
             effective_async = effective_async_descriptor(data.get("async"), ep.get("async"))
             if effective_async is not None:
                 check_async_descriptor(effective_async, where, str(service), endpoint_index,
@@ -992,6 +1116,8 @@ def main(argv: list[str]) -> int:
                 fail(errors, where, "cost.settle 'usage' requires an async descriptor")
             if ep.get("resource_ownership") is not None:
                 check_resource_ownership(ep["resource_ownership"], where, inp, errors)
+            if ep.get("managed_resource") is not None:
+                check_managed_resource(ep["managed_resource"], where, inp, errors)
             if ep.get("verified"):
                 ex = ep.get("example_response")
                 if not ex:

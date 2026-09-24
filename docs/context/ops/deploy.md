@@ -3,6 +3,10 @@ title: Running & deploying the server
 status: shipped
 sources:
   - pyproject.toml
+  - hatch_build.py
+  - scripts/build-dashboard.sh
+  - scripts/build-web.sh
+  - scripts/frontend-e2e-server.sh
   - src/treg/__main__.py
   - src/treg/maintenance.py
   - src/treg/alembic/env.py
@@ -30,6 +34,11 @@ This fragment documents behavior every operator needs to run or self-host a regi
 describe the private topology, live settings, account funding, incidents or rollout state of the
 hosted treg.to service. Superdesign operators use the private
 [treg.to deployment runbook](https://github.com/superdesigndev/treg-internal/blob/main/docs/production/deploy.md).
+
+Fish Audio shared-key capacity monitoring requires both `TREG_PLATFORM_KEY_FISHAUDIO` and
+`TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID`. The latter is the Fish workspace selector used only by the
+free API-credit probe; without it, capacity remains unknown rather than reading the unrelated
+personal wallet.
 
 ## Entry point (`__main__.py`)
 
@@ -131,6 +140,45 @@ SQLite aliases all three makers to one engine. It has no pool to protect and fil
 it cannot share, so separate engines would only manufacture lock failures. Tests pin routing rather
 than SQLite isolation.
 
+### Optional read replica
+
+`TREG_READ_DATABASE_URL` adds a datasource exposed as `read_session_maker`. Its supported drivers
+match the project's SQLite / PostgreSQL support: `sqlite+aiosqlite` and `postgresql+asyncpg`.
+Bare `postgres://` and `postgresql://` URLs normalize to `postgresql+asyncpg`, as for the primary;
+other read URL drivers fail settings validation. This does not add support for MySQL or other
+SQLAlchemy dialects. When empty, the read maker aliases `session_maker`, with the primary's existing
+transaction behavior (including writes) and no additional pool. Connections are opened only when used.
+
+A configured URL always gets an independent engine, even when it names the primary database:
+
+- PostgreSQL uses a `read` pool defaulting to two connections with no overflow;
+  `TREG_DB_POOL_OVERRIDES` accepts `read.pool_size` and `read.max_overflow`. Each connection sets
+  `default_transaction_read_only=on` through asyncpg's `server_settings`.
+- SQLite retains the driver's default pool behavior and sets `PRAGMA query_only=ON` on every new
+  read connection, including after reconnection. The primary's connections remain writable. For an
+  existing file, `sqlite+aiosqlite:///file:replica.db?mode=ro&uri=true` additionally opens the file
+  read-only and fails if it is missing. A plain SQLite URL retains SQLite's usual file-opening
+  behavior, including creating a missing file; `query_only` guards SQL changes, not file creation.
+  A separate in-memory SQLite URL starts empty and cannot serve as a copy of the primary.
+
+These connection settings guard accidental writes; they are not an authorization boundary and can
+be disabled by deliberate SQL. Use a physical replica/read-only database role or filesystem access
+controls as appropriate. Connection/query failures propagate without primary fallback.
+
+`pool_snapshot()` includes a separate `read` entry for a configured PostgreSQL datasource; SQLite
+engines are omitted as for the primary. `connection_budget()` describes only the primary pools;
+budget the read pool against its target database, including process count and deployment overlap.
+If both URLs target the same server, add both budgets against that server's limit.
+`dispose_engine()` also disposes the read engine. Schema upgrades, startup verification and test
+schema resets continue to target the primary.
+
+This datasource is opt-in infrastructure: no application query or worker currently uses it.
+Adopting callers must tolerate replica lag and keep writes, cursor advancement and concurrency
+control on the primary. Operators must provision and synchronize a compatible schema and data;
+setting a URL does not establish replication, translate dialect-specific queries, or migrate any
+Cron job's workload. Configure it in a private local `.env` or the hosting service's environment;
+`.env.example` contains no secrets.
+
 ## Configuration (`config.py`)
 
 `Settings` uses the `TREG_` prefix, reads `.env`, and is cached by `get_settings()`.
@@ -185,13 +233,61 @@ database is local SQLite. Hosted deployments must still leave it false.
 
 ## Web service and generic Render example
 
-`GET /` serves the single-file dashboard from `src/treg/web/index.html`. The package includes the
-whole `web/` directory, so tutorials, agent files and installer assets ship with the server wheel.
+The redesigned homepage ships to all homepage visitors independently of Dashboard rollout.
+Its rollback requires a code rollback/revert; the Dashboard master switch does not change it.
+
+`GET /app` selects either the frozen legacy artifact or the Vite-built Vue application.
+The rollout defaults to legacy. Set `TREG_DASHBOARD_ROLLOUT_ENABLED=true` with a JSON array in
+`TREG_DASHBOARD_ROLLOUT_USER_IDS` for an account allowlist, then increase
+`TREG_DASHBOARD_ROLLOUT_PERCENT` from zero. Disabling the master switch forces legacy, including
+allowlisted accounts. Environment changes require restarting Web processes, not rebuilding assets.
+Both frontends ship together; anonymous catalog/sign-in entries remain legacy even at 100%.
+See `frontend/README.md` for the full rollout and retirement contract.
+The frontend is authored in `frontend/` within the same repository. `GET /` retains the existing
+landing behavior. Dashboard assets, tutorials, agent files and installer assets ship with the wheel.
+Hosted-page MP4 demos remain in Git checkout deployments but are excluded from published wheels and
+source archives; a server installed from PyPI serves the product surfaces without those optional
+marketing videos.
+
+Run `bash scripts/build-dashboard.sh` before building a distributable Python package. Hatch's
+build hook rejects a wheel or sdist without the dashboard entry and includes the generated assets;
+editable installs remain Python-only. Node and npm are build tools, not runtime services.
+`TREG_FRONTEND_DEV=true` serves the authored entry with Vite scripts on local port 5173 and is
+accepted only with SQLite and a loopback public URL. `scripts/dev-local.sh up` manages both processes.
+For browser previews from another device, build the dashboard and start or restart the local stack
+with `TREG_FRONTEND_DEV=false`; compiled assets then use the same origin on port 18790.
 
 [`deploy/render.example.yaml`](../../../deploy/render.example.yaml) is a generic self-hosting example.
-It creates one web service and one PostgreSQL database, runs `python -m treg upgrade` before serving,
+It creates one web service and one PostgreSQL database, builds with
+`bash scripts/build-web.sh` (frontend build followed by the locked Python install), runs
+`python -m treg upgrade` before serving,
 starts `python -m treg`, and checks `/meta`. Copy it into the operator's own deployment repository and
 change resource names, region, plans, public URL and integrations.
+
+### Build from the lock file
+
+A deployment built from a checkout must install the dependency set `uv.lock` records, which is the
+set CI tests (`uv sync --locked` in `.github/workflows/ci.yml`). `pip install ".[server]"` does not
+read the lock: it resolves every open range in `pyproject.toml` afresh, so a build made after a
+dependency publishes a breaking release ships that release with no commit in this repository, and
+the suite that passed on the lock proves nothing about it. `--locked` refuses a stale lock instead
+of resolving, which makes a forgotten `uv lock` a failed build rather than a silent drift; `--no-dev`
+leaves the test tooling out; `--active` installs into the virtual environment the platform already
+activated for the start command. Every process that shares a database (web service and scheduled
+workers) must build the same way, or they run different dependency sets against one schema.
+
+Render adds `uv` to its Python runtime when `uv.lock` is present at the service root, but at an
+older version than `[tool.uv] required-version` accepts; set `UV_VERSION` on the service to a
+version that satisfies it. Upgrading a dependency is a `uv lock --upgrade-package <name>` (or
+`uv lock --upgrade`) commit that CI tests before it can reach a build.
+
+Installing the published wheel (`pip install "tools-registry[server]"`) is a different path: a wheel
+carries no lock, so that operator pins versions in their own requirements file.
+
+The published source archive is built by Hatchling from the checkout. The Hatch target exclusions in
+`pyproject.toml` keep local linked worktrees, root-level working plans and previews, evidence,
+databases, environment files and hosted-page MP4 demos out of public artifacts. Release validation
+inspects both archive contents; a clean Git diff alone is not sufficient.
 
 The example is deliberately not the treg.to production Blueprint. The hosted topology and settings
 are private operational state.
@@ -225,6 +321,10 @@ contract:
 - `TREG_PLATFORM_PROVIDERS` enables use of configured platform credentials.
 - `TREG_OVERFLOW_MODE` and `TREG_OVERFLOW_DAILY_BUDGET_USD` control same-vendor overflow. See
   [capacity](capacity.md).
+- `TREG_SEARCH_EXPERIMENT` (`off` | `shadow` | `interleave`) runs the
+  [discovery experiment](../architecture/search-experiment.md) on the MCP search tools; it is also
+  its kill switch. Needs `TREG_TYPESAFE_API_KEY`; `TREG_TYPESAFE_TIMEOUT_S` bounds what the judge
+  may add to a search. Off by default, and off whenever the key is empty.
 
 Exact treg.to values, funded accounts and rollout instructions live in the private
 [provider-capacity runbook](https://github.com/superdesigndev/treg-internal/blob/main/docs/production/provider-capacity.md).
@@ -241,6 +341,10 @@ without importing the heavy database stack into the light `treg` CLI.
 - `treg-worker arena insights` folds new audit rows into the rolling Arena aggregate
   (`--max-seconds`, default 110, bounds one pass; schedule it every two minutes).
 - `treg-worker catalog stats` folds new audit rows into per-endpoint, per-day reliability buckets
+- `treg-worker jev xboost` runs the `/jev` launch-radar demo once a day: it calls treg's own `/call/` API
+  with `TREG_JEV_TREG_TOKEN` (a member token of the demo team, so the spend is an ordinary bill) and jev
+  through the Vercel AI Gateway (`TREG_AI_GATEWAY_API_KEY`), and stores the run under Ephemeral for the page.
+  Both variables also belong on the web service, which needs them for the visitor judge endpoint.
   (`--max-rows`, default 500,000, bounds one pass; schedule it every few minutes). The catalog keeps
   computing observations live until this command has caught up once, so it can be scheduled after
   the application deploys, and a self-hosted registry that never schedules it loses nothing.

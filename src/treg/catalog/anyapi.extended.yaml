@@ -5711,6 +5711,7 @@ endpoints:
   observed_time: 2.89
 - id: anyapi.web.crawl
   tier: extended
+  capability: web.crawl
   platform: web
   domain: crawl
   method: POST
@@ -5755,6 +5756,7 @@ endpoints:
   observed_time: 5.75
 - id: anyapi.web.map
   tier: extended
+  capability: web.map
   platform: web
   domain: map
   method: POST

@@ -58,7 +58,9 @@ development environment and avoids a second install for a fast static architectu
 The R2 SDK (`obstore`) is installed only through `[server]` and forbidden from
 lightweight CLI imports. `infra.object_store.open_r2` loads it lazily; bootstrap assembles the
 concrete client or an injected in-memory implementation. Call write allowlists include the
-archive body PUT chain because it persists the paid response outside any DB transaction.
+archive body PUT chain because it persists the paid response outside any DB transaction, and the
+post-relay provider-resource register/rename/tombstone calls because shared-key resource ownership
+must be established or advanced by the call that receives the provider's successful response.
 
 The separate `test-postgres` job runs its database-sensitive subset serially against Postgres 16;
 it uses unbuffered Python output and a 15-minute job budget so a slow test remains diagnosable. The

@@ -29,6 +29,8 @@ _db_dir = os.path.join(tempfile.gettempdir(), "treg-tests")
 os.makedirs(_db_dir, exist_ok=True)
 _default = f"sqlite+aiosqlite:///{_db_dir}/treg-test{'-' + _worker if _worker else ''}.db"
 os.environ["TREG_DATABASE_URL"] = os.environ.get("TREG_TEST_DB_URL", _default)
+# Replica tests opt in explicitly; never inherit a real replica from the shell or .env.
+os.environ["TREG_READ_DATABASE_URL"] = ""
 os.environ["TREG_EMAIL_DEV_MODE"] = "true"  # tests need the returned OTP code (prod default is now False)
 os.environ["TREG_RESEND_API_KEY"] = ""  # never fire a real Resend send from the test suite (send_otp/send_invite skip when empty)
 os.environ["TREG_RUN_ALLOWED_BINS"] = "sh,echo,true,false,cat,sleep,treg-nonexistent-bin-xyz"  # allow the test CLIs for --server run tests
@@ -58,6 +60,8 @@ for _k in (
     "PLATFORM_KEY_OPENMART", "PLATFORM_KEY_LIMADATA", "PLATFORM_KEY_HARVESTAPI",
     "PLATFORM_KEY_DROPLEADS",
     "PLATFORM_KEY_FINANCIALDATASETS",
+    "PLATFORM_KEY_ADYNTEL", "PLATFORM_EMAIL_ADYNTEL",
+    "PLATFORM_KEY_KEENABLE", "PLATFORM_KEY_OLOSTEP",
 ):
     os.environ[f"TREG_{_k}"] = ""  # the test upstream is an in-process ASGI transport, not real DNS
 

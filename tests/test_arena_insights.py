@@ -34,6 +34,17 @@ async def record(hash_, *, status=200, response=None, error=None, cached=False, 
         return row.id
 
 
+async def test_naive_datetime_insert_does_not_raise_value_error(clients):
+    """Regression test: SQLModel 0.0.45 rejects naive datetime binds on INSERT.
+
+    The arena insights collector INSERTs into ArenaInsightState with scan_until=now()-60s.
+    Before the NaiveUTC annotation fix and sqlmodel pin, this raised:
+        ValueError: Datetime values must have timezone information.
+    """
+    backlog = await service.collect_batch(session_maker)
+    assert backlog is False  # no records, but INSERT succeeded
+
+
 async def test_database_stats_reclassify_deduplicate_and_exclude_errors(clients):
     await record("same", response={"data":{"email":"old@example.test"}}, ago=300, duration=100)
     await record("same", response={"data":{"email":None}}, ago=280)

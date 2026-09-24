@@ -19,6 +19,99 @@ from treg.domain.catalog import store as cs
 from treg import oauth_providers as P
 
 
+def test_tavily_surface_keeps_only_safe_synchronous_data_tools():
+    cat = cs.load()
+    rows = {ep["id"]: ep for ep in cat.for_provider("tavily")}
+    assert set(rows) == {
+        "tavily.web.search", "tavily.web.extract", "tavily.web.map", "tavily.web.crawl",
+    }
+    assert all(ep["platform"] == "web" and ep["scope"] == "any_account" for ep in rows.values())
+    assert all(cat.platform_eligible(ep) for ep in rows.values())
+    assert rows["tavily.web.extract"]["input"]["body"]["urls"]["maxItems"] == 20
+    assert rows["tavily.web.search"]["input"]["body"]["include_usage"] == {
+        "type": "boolean", "required": False, "enum": [True], "example": True,
+        "note": "Optional with your own key; platform Search requires true so treg can settle "
+                "from this request's reported usage.",
+    }
+    assert all("include_usage" not in rows[eid]["input"]["body"] for eid in (
+        "tavily.web.extract", "tavily.web.map", "tavily.web.crawl",
+    ))
+    assert all(ep["verified"] == "2026-09-21" and ep["example_file"] for ep in rows.values())
+    assert cat.credit_rates["tavily"] == 0.008
+    shown = {eid: cat.cost_view(ep["cost"], "tavily") for eid, ep in rows.items()}
+    assert {eid: (cost["usd"], cost["unit"]) for eid, cost in shown.items()} == {
+        "tavily.web.search": (0.016, "call"),
+        "tavily.web.extract": (0.0032, "result"),
+        "tavily.web.map": (0.0016, "page"),
+        "tavily.web.crawl": (0.0048, "result"),
+    }
+    assert shown["tavily.web.search"]["usd_min"] == 0.008
+    assert shown["tavily.web.extract"]["usd_min"] == 0.0016
+    assert shown["tavily.web.map"]["usd_min"] == 0.0008
+    assert shown["tavily.web.crawl"]["usd_min"] == 0.0024
+    assert shown["tavily.web.extract"]["tavily_rates"] == {"basic": 0.2, "advanced": 0.4}
+    assert shown["tavily.web.map"]["tavily_rates"] == {"regular": 0.1, "instructions": 0.2}
+    assert shown["tavily.web.crawl"]["tavily_rates"]["advanced_instructions"] == 0.6
+    assert all("reported_charge" not in rows[eid]["cost"] for eid in rows)
+    serialized = json.dumps(rows).lower()
+    assert not any(term in serialized for term in (
+        "research task", "account usage", "key management", "feedback endpoint", "export endpoint",
+    ))
+
+
+def test_olostep_surface_is_bounded_byok_and_platform_safe():
+    cat = cs.load(refresh=True)
+    rows = {ep["id"]: ep for ep in cat.for_provider("olostep")}
+    assert set(rows) == {
+        "olostep.web.scrape",
+        "olostep.web.search",
+        "olostep.web.answer",
+        "olostep.web.map.search",
+        "olostep.web.crawl",
+        "olostep.web.crawl.status",
+        "olostep.web.crawl.results",
+    }
+    assert all(ep["scope"] == "any_account" for ep in rows.values())
+    assert all(cat.platform_eligible(ep) for ep in rows.values())
+    assert not any("batch" in eid for eid in rows)
+    assert cat.credit_rates["olostep"] == 0.002
+    assert cat.cost_view(rows["olostep.web.scrape"]["cost"], "olostep")["usd"] == 0.002
+    assert cat.cost_view(rows["olostep.web.search"]["cost"], "olostep")["usd"] == 0.01
+    assert cat.cost_view(rows["olostep.web.answer"]["cost"], "olostep")["usd"] == 0.04
+    assert rows["olostep.web.map.search"]["input"]["body"]["top_n"]["max"] == 1000
+    crawl = rows["olostep.web.crawl"]
+    assert crawl["input"]["body"]["max_pages"]["max"] == 100
+    assert crawl["cost"]["settle"] == "usage"
+    assert crawl["cost"]["usage"] == {"path": "credits_consumed", "unit": "credit"}
+    status_owner = rows["olostep.web.crawl.status"]["resource_ownership"]["requires"]
+    results_owner = rows["olostep.web.crawl.results"]["resource_ownership"]["requires"]
+    assert status_owner["kind"] == "poll:olostep.web.crawl.status"
+    assert results_owner["kind"] == "fetch:olostep.web.crawl.results"
+
+
+def test_trestleiq_surface_is_three_direct_single_record_tools():
+    cat = cs.load()
+    rows = {ep["id"]: ep for ep in cat.for_provider("trestleiq")}
+    assert set(rows) == {
+        "trestleiq.people.phone.verify",
+        "trestleiq.people.contact.verify",
+        "trestleiq.people.address.verify",
+    }
+    assert all(ep["platform"] == "people" for ep in rows.values())
+    assert all(ep["method"] == "GET" and ep["strict_query"] for ep in rows.values())
+    assert all(cat.platform_eligible(ep) for ep in rows.values())
+    assert cat.cost_view(rows["trestleiq.people.phone.verify"]["cost"], "trestleiq")["usd"] == 0.015
+    assert cat.cost_view(rows["trestleiq.people.contact.verify"]["cost"], "trestleiq")["usd"] == 0.03
+    assert cat.cost_view(rows["trestleiq.people.address.verify"]["cost"], "trestleiq")["usd"] == 0.01
+    assert all(ep["cost"]["source"] == "observed" for ep in rows.values())
+    assert all(ep["cost"]["confidence"] == "verified" for ep in rows.values())
+    serialized = json.dumps(rows)
+    assert "add_ons" not in serialized
+    assert not any("bulk" in eid or "reverse" in eid for eid in rows)
+    assert not any(eid.startswith("trestleiq.") for eid in cat.adapters)
+    assert "treg.people.phone.verify" not in cat.by_id
+
+
 def test_openmart_surface_separates_platform_reads_from_byok_lifecycles():
     cat = cs.load()
     rows = cat.for_provider("openmart")
@@ -718,6 +811,12 @@ async def test_unknown_endpoint_is_404(clients: AsyncClient):
     assert r.status_code == 404 and "tikhub.tiktok.nope" in r.text
 
 
+async def test_unknown_endpoint_access_is_a_clean_404(clients: AsyncClient):
+    r = await clients.get("/catalog/endpoints/not.a.real.endpoint/access")
+    assert r.status_code == 404
+    assert "unknown endpoint" in r.text
+
+
 def test_hunter_multi_domain_search_uses_official_query_filters():
     """Hunter Multi-Domain Search (Beta) rejects a JSON `companies` array with
     `wrong_params` / `Unknown parameter: companies.` Official docs take company
@@ -1090,20 +1189,22 @@ async def test_ai_generation_pages_keep_comparisons_curated_and_coverage_in_mode
     assert {row["capability"] for row in voice_rows} == {
         "voice-gen.speech-2-8-hd.generate",
         "voice-gen.speech-2-8-turbo.generate",
+        "voice-gen.fishaudio.s2-1-pro.generate",
     }
     voice_endpoints = [endpoint for row in voice_rows for endpoint in row["endpoints"]]
     assert {endpoint["id"] for endpoint in voice_endpoints} == {
         "minimax.voice-gen.speech-2-8-hd",
         "minimax.voice-gen.speech-2-8-turbo",
+        "fishaudio.tts.s2-1-pro",
     }
-    assert all(endpoint["provider"] == "minimax" for endpoint in voice_endpoints)
+    assert {endpoint["provider"] for endpoint in voice_endpoints} == {"minimax", "fishaudio"}
     catalog = cs.load()
     assert all(catalog.by_id[endpoint["id"]]["cache"] == "forbidden"
                for endpoint in voice_endpoints)
 
     voice_full = (await clients.get(
         "/catalog/platforms/voice-gen?include_hidden=1")).json()
-    assert voice_full["hidden_count"] == 1
+    assert voice_full["hidden_count"] == 6
     action_endpoints = {
         endpoint["id"]: endpoint
         for section in voice_full["domains"]
@@ -1111,7 +1212,20 @@ async def test_ai_generation_pages_keep_comparisons_curated_and_coverage_in_mode
         for endpoint in row["endpoints"]
         if endpoint["kind"] == "utility"
     }
-    assert set(action_endpoints) == {"minimax.voice-gen.voices.list"}
+    assert set(action_endpoints) == {
+        "fishaudio.voices.discover", "minimax.voice-gen.voices.list",
+    }
+    account_endpoints = {
+        endpoint["id"]
+        for section in voice_full["domains"]
+        for row in section["rows"]
+        for endpoint in row["endpoints"]
+        if endpoint["kind"] == "account"
+    }
+    assert account_endpoints == {
+        "fishaudio.voices.create", "fishaudio.voices.list",
+        "fishaudio.voices.update", "fishaudio.voices.delete",
+    }
     assert catalog.by_id["minimax.voice-gen.voices.list"]["platform_request"] == {
         "body.voice_type": "system"
     }
@@ -1530,6 +1644,9 @@ def test_generic_display_prices_match_web_and_cli():
     cost = cat.cost_view({'type': 'per_result', 'currency': 'USD', 'value': 2,
                          'display': {'unit': 'item', 'variable': True}}, 'another-provider')
     assert _price_label(cost) == _cost_usd(cost) == _cost_label(cost) == '$2+/item'
+    maximum = cat.cost_view({'type': 'per_call', 'currency': 'USD', 'value': 0.064,
+                             'display': {'unit': 'call', 'maximum': True}}, 'another-provider')
+    assert _price_label(maximum) == _cost_usd(maximum) == _cost_label(maximum) == 'up to $0.064/call'
 
 
 def test_hunter_domain_search_advertises_one_search_credit():

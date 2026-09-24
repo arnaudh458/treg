@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..application import feedback as feedback_app
 from ..domain import feedback
 from ..domain.feedback import reviews
+from ..domain.governance.access import pinned_tag_predicates
+from ..models import Feedback
 from ..domain.identity.access import Caller, require_member, require_superadmin
 from ..feedback_contract import FeedbackCategory, ReviewUsefulness
 from ..infra.db import get_admin_session, get_session
@@ -39,7 +41,8 @@ class FeedbackIn(BaseModel):
 async def submit_feedback(body: FeedbackIn, caller: Caller = Depends(require_member)) -> dict:
     try:
         feedback_id = await feedback_app.submit(
-            org_id=caller.org_id, user_email=caller.email, **body.model_dump(),
+            org_id=caller.org_id, user_email=caller.email,
+            pinned_tags=caller.membership.pinned_tags, **body.model_dump(),
         )
     except feedback_app.FeedbackRateLimited:
         raise HTTPException(429, "Too many feedback reports. Try again later.") from None
@@ -51,7 +54,8 @@ async def get_feedback(
     feedback_id: int, caller: Caller = Depends(require_member),
     db: AsyncSession = Depends(get_session),
 ) -> dict:
-    row = await feedback.get(db, feedback_id, caller.org_id)
+    row = await feedback.get(db, feedback_id, caller.org_id,
+                             *pinned_tag_predicates(Feedback.tags, caller.membership.pinned_tags))
     if row is None:
         raise HTTPException(404, "Feedback not found")
     return {"feedback_id": row.id, "status": "received", "category": row.category,
@@ -86,7 +90,8 @@ async def submit_review(
     try:
         review_id, inserted = await feedback_app.submit_review(
             org_id=caller.org_id, user_email=caller.email,
-            client=request.headers.get("X-Treg-Client", ""), **body.model_dump(),
+            client=request.headers.get("X-Treg-Client", ""),
+            pinned_tags=caller.membership.pinned_tags, **body.model_dump(),
         )
     except feedback_app.ReviewCallNotFound:
         raise HTTPException(404, "Call record not found in this team; it may not be written yet. Retry shortly.") from None

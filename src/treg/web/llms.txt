@@ -136,7 +136,9 @@ one back with its ledger entries.
   limit — so do not sell them to your users as exact.
 - **Declare** which keys carry budgets at `PATCH /orgs/{id}/settings` (up to 3).
 - **Isolate** the few who need it: `treg org agent-new bot --pin customer=cust_A` mints a token that
-  can only ever bill `cust_A`. Tag for counting, token for control.
+  can only ever bill `cust_A` and reads only matching call/run history and shared-provider async
+  objects. Foreign or untagged ids return 404. BYOK account access and public media URLs are unchanged.
+  Tag for counting, token for control.
 
 This use case — your product calling the hosted treg.to API, billing your users based on the usage
 data treg returns — is **allowed and encouraged** with no special agreement. treg.to is the API you
@@ -277,6 +279,18 @@ synchronous: call `minimax.voice-gen.speech-2-8-hd` or
 `minimax.voice-gen.speech-2-8-turbo` with `stream:false` and `output_format:"url"`; the response
 contains a generated-audio URL valid for 24 hours and the price scales with input characters.
 Call `minimax.voice-gen.voices.list` with `{"voice_type":"system"}` to discover valid voice IDs.
+
+Fish Audio supports `fishaudio.tts.s2-1-pro`, public voice discovery, and private voice
+create/update/delete tools. TTS returns binary audio: redirect CLI stdout to a file, or use MCP
+`call_media` for native audio content. Call `fishaudio.voices.discover` with `self=false` and
+`licensed=true|false`, then pass a returned `_id` as TTS `reference_id`; `true` selects Fish's
+rights-secured subset and `false` includes public/community voices. On treg's Fish account, any
+non-team id is rechecked as public before synthesis. List team voices with
+`treg resources list --provider fishaudio --kind voice` or MCP `resources_list`; both use Fish-account
+voices under BYOK and otherwise return only the current team's platform-created voices. HTTP callers use
+`GET /orgs/{org_id}/provider-resources?provider=fishaudio&kind=voice` for the same normalized view. Fish's
+account-wide voice list is BYOK-only. A team's own Fish key always wins and remains unrestricted and
+unmetered.
 
 **Video and image generation use async calls.** A generation call is an **async task**: the
 submission returns a task id, and the response carries `X-Treg-Async`, a JSON descriptor saying
@@ -510,6 +524,8 @@ A small tool set, the same for every client:
     catalog_search   find endpoints by what you want to DO, with prices
     catalog_get      one endpoint in full: params, cost, reliability, siblings
     call             call a catalog endpoint by id, or one of your team's own tools
+    call_media       call an audio endpoint and receive native audio plus call/cost metadata
+    resources_list   list durable team resources (Fish voices use the connected account under BYOK)
     balance          the team's prepaid balance
     my_tools         what your team registered that you can call without the key
     catalog_request  request a missing capability

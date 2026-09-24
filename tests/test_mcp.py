@@ -120,8 +120,127 @@ async def test_the_server_lists_the_shared_tools(clients):
                                      "clientInfo": {"name": "t", "version": "1"}}, token)
         r = await _rpc(c, "tools/list", token=token)
         names = {t["name"] for t in r.json()["result"]["tools"]}
-    assert names == {"catalog_search", "catalog_get", "call", "balance", "my_tools", "catalog_request", "feedback",
-                     "review", "hub_create", "hub_update", "hub_mine"}
+    assert names == {"catalog_search", "catalog_get", "call", "call_media", "resources_list",
+                     "balance", "my_tools", "catalog_request", "feedback", "review",
+                     "hub_create", "hub_update", "hub_mine"}
+
+
+async def test_call_media_returns_native_audio_with_structured_metadata(clients, monkeypatch):
+    import base64
+
+    from treg.application.call import service as call_service
+    from treg.application.call.types import UpstreamResponse
+    from treg.config import get_settings
+
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FISHAUDIO", "PLATFORM-FISH")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "fishaudio")
+    get_settings.cache_clear()
+
+    async def relay(*args, **kwargs):
+        async def stream():
+            yield b"audio-bytes"
+
+        async def close():
+            return None
+
+        return UpstreamResponse(200, ((b"content-type", b"audio/mpeg"),), stream(), close)
+
+    monkeypatch.setattr(call_service, "relay", relay)
+    token = clients.headers["X-Treg-Token"]
+    try:
+        async with mcp_session(clients) as c:
+            await _rpc(c, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                         "clientInfo": {"name": "audio", "version": "1"}}, token)
+            response = await _rpc(c, "tools/call", {"name": "call_media", "arguments": {
+                "endpoint_id": "fishaudio.tts.s2-1-pro",
+                "headers": {"model": "s2.1-pro"},
+                "body": {"text": "hello"},
+            }}, token)
+        result = response.json()["result"]
+        assert result["content"][0] == {
+            "type": "audio", "data": base64.b64encode(b"audio-bytes").decode(),
+            "mimeType": "audio/mpeg",
+        }
+        assert result["structuredContent"]["status"] == 200
+        assert result["structuredContent"]["endpoint_id"] == "fishaudio.tts.s2-1-pro"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_call_accepts_base64_multipart_uploads_and_resources_list_reads_the_result(
+    clients, monkeypatch,
+):
+    import base64
+
+    from treg.application.call import service as call_service
+    from treg.application.call.types import UpstreamResponse
+    from treg.config import get_settings
+
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FISHAUDIO", "PLATFORM-FISH")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "fishaudio")
+    get_settings.cache_clear()
+
+    async def relay(*args, **kwargs):
+        async def stream():
+            yield b'{"_id":"mcp-voice"}'
+
+        async def close():
+            return None
+
+        return UpstreamResponse(201, ((b"content-type", b"application/json"),), stream(), close)
+
+    monkeypatch.setattr(call_service, "relay", relay)
+    token = clients.headers["X-Treg-Token"]
+    try:
+        async with mcp_session(clients) as c:
+            created = await _call_tool(c, "call", {
+                "endpoint_id": "fishaudio.voices.create",
+                "form": {"type": "tts", "title": "MCP narrator", "train_mode": "fast",
+                         "visibility": "private"},
+                "uploads": [{"name": "voices", "filename": "voice.wav",
+                             "content_type": "audio/wav",
+                             "data_base64": base64.b64encode(b"RIFF-test").decode()}],
+            }, token=token)
+            listed = await _call_tool(c, "resources_list", {
+                "provider": "fishaudio", "kind": "voice",
+            }, token=token)
+        assert created["status"] == 201
+        assert listed["count"] == 1
+        assert listed["resources"][0]["upstream_id"] == "mcp-voice"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_resources_list_uses_and_normalizes_fish_byok_voices(clients, monkeypatch):
+    from treg.application.call import service as call_service
+    from treg.application.call.types import UpstreamResponse
+
+    await clients.post("/secrets", json={"name": "fishaudio", "value": "OWN-FISH"})
+
+    async def relay(*args, **kwargs):
+        async def stream():
+            yield b'{"items":[{"_id":"byok-voice","title":"Account narrator"}],"total":1}'
+
+        async def close():
+            return None
+
+        return UpstreamResponse(
+            200, ((b"content-type", b"application/json"),), stream(), close)
+
+    monkeypatch.setattr(call_service, "relay", relay)
+    token = clients.headers["X-Treg-Token"]
+    async with mcp_session(clients) as c:
+        listed = await _call_tool(c, "resources_list", {
+            "provider": "fishaudio", "kind": "voice",
+        }, token=token)
+    assert listed["source"] == "byok"
+    assert listed["count"] == 1
+    assert listed["resources"][0] == {
+        "id": "byok-voice", "provider": "fishaudio", "kind": "voice",
+        "upstream_id": "byok-voice", "display_name": "Account narrator",
+        "created_by": None, "source_call_id": None,
+        "status": "active", "created_at": None, "updated_at": None, "deleted_at": None,
+    }
 
 
 async def test_catalog_search_returns_priced_results(clients):
@@ -367,16 +486,17 @@ async def test_every_tool_declares_what_it_can_do(clients):
     from treg.mcp import mcp as server
 
     ann = {t.name: t.annotations for t in await server.list_tools()}
-    assert set(ann) == {"catalog_search", "catalog_get", "call", "balance", "my_tools",
+    assert set(ann) == {"catalog_search", "catalog_get", "call", "call_media", "resources_list", "balance", "my_tools",
                         "catalog_request", "feedback", "review", "hub_create", "hub_update", "hub_mine"}
     assert all(a.title is None for a in ann.values())
-    for name in ("catalog_search", "catalog_get", "balance", "my_tools"):
+    for name in ("catalog_search", "catalog_get", "resources_list", "balance", "my_tools"):
         a = ann[name]
         assert a and a.read_only_hint is True, name
         assert a.destructive_hint is False and a.open_world_hint is False, name
-    a = ann["call"]
-    assert a.read_only_hint is False
-    assert a.destructive_hint is True and a.open_world_hint is True
+    for name in ("call", "call_media"):
+        a = ann[name]
+        assert a.read_only_hint is False
+        assert a.destructive_hint is True and a.open_world_hint is True
     # catalog_request writes (a row on treg itself) but touches nothing upstream and spends nothing.
     a = ann["catalog_request"]
     assert a.read_only_hint is False
@@ -1417,7 +1537,7 @@ async def test_the_SEARCH_TOOL_itself_ranks_on_evidence_not_just_the_helper(clie
     from treg.infra.db import session_maker
     from treg.models import CallRecord
 
-    broken = "apify.meta-ads.library.search"  # earlier in file order: rerank must move it
+    broken = "apify.tiktok-ads.library.search"  # earlier in file order: rerank must move it
     good = "tikhub.x.tiktok-ads-search-ads"
     async with session_maker() as db:
         for status in (200, 200, 200, 200, 503):
@@ -1431,9 +1551,9 @@ async def test_the_SEARCH_TOOL_itself_ranks_on_evidence_not_just_the_helper(clie
 
     token = (await clients.post("/users", json={"email": "ranker@superdesign.dev"})).json()["token"]
     async with mcp_session(clients) as c:
-        await _call_tool(c, "catalog_search", {"query": "ad library", "limit": 25}, token=token)
+        await _call_tool(c, "catalog_search", {"query": "tiktok ads", "limit": 25}, token=token)
         await app.state.endpoint_observation_reader.wait_for_idle()
-        out = await _call_tool(c, "catalog_search", {"query": "ad library", "limit": 25}, token=token)
+        out = await _call_tool(c, "catalog_search", {"query": "tiktok ads", "limit": 25}, token=token)
     ids = [r["endpoint_id"] for r in out["results"]]
     assert ids.index(good) < ids.index(broken), ids
     good_row = next(r for r in out["results"] if r["endpoint_id"] == good)

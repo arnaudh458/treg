@@ -35,6 +35,7 @@ sources:
   - tests/test_capacity_know.py
   - tests/test_capacity_collectors.py
   - tests/test_financialdatasets.py
+  - tests/test_tinyfish.py
 related:
   - architecture/data-model.md
   - architecture/money.md
@@ -44,16 +45,66 @@ related:
 
 # Provider capacity
 
+TinyFish capacity is `cash / manual / api`. `collectors._tinyfish` calls the free internal
+`GET /v1/wallet` route with the platform `X-API-Key`, accepts only a finite nonnegative
+`available_balance`, and retains the response currency plus whether vendor auto-reload is enabled.
+The wallet remains internal capacity evidence and is not a catalog tool. Shared-key request
+smoothing uses Search's documented 30 requests/minute burst limit. Fetch also limits URLs per
+minute/day and Agent limits concurrent runs; those differently shaped upstream limits are not
+misrepresented as request-token limits. An Agent run reserves its documented worst-case step cost:
+$2.40 for the default 150-step ceiling, or the $8.00 500-step fallback when the request cannot be
+matched to that ceiling. TinyFish currently beta-gates a caller-supplied `max_steps`, so low-balance
+teams can be refused even when the eventual run would be cheap; unused hold is released when the
+terminal `num_of_steps` is settled. BYOK calls bypass shared-key smoothing and treg metering.
+
+Fish Audio capacity is `cash / manual / api`. `collectors._fishaudio` calls the free
+`GET /wallet/self/api-credit` route with the platform Bearer key and the workspace selected through
+its `team_id` query parameter. `TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID` supplies that selector. When
+it is absent, the collector reports unknown and makes no request: the unscoped route returns the
+API-key user's separate personal wallet and can falsely look empty while the shared workspace is
+funded. The response's finite nonnegative `credit` value is the remaining USD workspace balance.
+treg never enables or performs vendor top-ups. Shared-key planning uses the documented Starter
+baseline of 5 concurrent requests, corroborated by a live six-request burst where five succeeded
+and one received Fish's concurrency-limit 429. That is a concurrency allowance, not QPS, so it is
+not encoded in the token-bucket rate smoother; Fish refuses excess work at its account boundary.
+BYOK calls use the customer's Fish account instead. The funded account was not deliberately
+exhausted, so the exact zero-balance response remains unrecorded and no overflow route is claimed.
+
+Tavily's internal collector calls `GET /usage` with the platform Bearer key. A finite `key.limit`
+is preferred when present. When the key has no independent cap, the collector sums the finite
+remaining account pools (`account.plan_limit - account.plan_usage` plus PAYGO when that pool has a
+finite limit); absent or malformed pools remain unknown rather than becoming zero. The policy is
+`credits / manual / api`, with conservative shared-key smoothing at the documented development
+limit of 100 requests per minute. HTTP 432 is a documented plan-cap quota signal and HTTP 433 is a
+PAYGO-cap quota signal. `/usage` is capacity evidence only: it is not a catalog tool and may lag the
+per-response `usage.credits` used for settlement. The included plan allowance renews monthly;
+raising or enabling the separate PAYGO ceiling is an operator action, and treg assumes no automatic
+top-up. A controlled `/usage` burst did not reproduce its documented 10-per-10-minute 429, so the
+rate policy remains documentation-derived. The funded account was not deliberately exhausted;
+432/433 signatures are documentation-derived rather than live-observed.
+
+TrestleIQ publishes no free balance or usage API. Capacity reports the wallet as Developer
+Portal-only and does not spend a validation query to read it. The policy records cash with vendor
+auto recharge, manually verified as enabled in the portal, and a documented 10 requests/second
+shared-key pace. treg does not read or change the vendor's auto-top-up setting.
+
+Adyntel publishes no free balance or usage API. `NO_BALANCE_API` therefore reports PAYG credits as
+dashboard-only instead of the ambiguous "no fetcher written yet" state. `_KNOWN` classifies the
+wallet as manually funded credits, and `_RATE_LIMITS` smooths treg's shared key at the documented
+5 requests/second; BYOK remains outside capacity policy. An eight-request concurrent live burst
+returned eight HTTP 200 responses without `Retry-After`, so the pace is documentation-derived rather
+than a reproduced 429 limit. Top-up remains a manual provider-dashboard operation.
+
 LimaData exposes no free standalone balance API, so capacity reports its credit balance as
 dashboard-only. The assigned account's existing automatic top-up is enabled, and the default policy
 is `credits / auto_recharge / manual`. Shared-key smoothing uses the documented default one request
-per second; BYOK bypasses it. See [LimaData](../architecture/limadata.md).
+per second; BYOK bypasses it.
 
 BounceBan's collector calls the free `GET /v1/account` route with the raw `Authorization` key and
 reads `available_credits`. Zero and finite nonnegative numbers are exact balances; missing, Boolean,
 string, negative, and non-finite values are unknown. Its policy is `credits / manual / api`, with a
 conservative shared-key rate of 25 requests per second. No reset, renewal, or auto-top-up behavior is
-inferred, and no overflow route is claimed. See [BounceBan](../architecture/bounceban.md).
+inferred, and no overflow route is claimed.
 
 Datagma's collector calls the free internal `GET /api/ingress/v1/mine` route with the query-bound
 API ID and retains only `currentCredit`. Account identity and plan fields are discarded and never
@@ -61,31 +112,29 @@ become catalog output. Finite nonnegative numbers and decimal strings are accept
 negative, and nonfinite values are rejected. HTTP failures are sanitized so the URL cannot expose
 the query credential. Its policy is `credits / manual / api`, with the documented 10 requests per
 second shared-key limit. No empty-account signature was forced and no overflow route is claimed.
-See [Datagma](../architecture/datagma.md).
 
 ZeroBounce's collector calls the free `GET /v2/getcredits` route with the query-bound key and reads
 `Credits`. Nonnegative integers and decimal strings are exact balances. Boolean, missing,
 malformed, and negative values are unknown; this includes the provider's invalid-key `-1` sentinel.
 Its policy is `credits / auto_recharge / api` for vendor-managed Auto-Pay, but treg does not read or
 change that setting. Shared-key pacing starts at 25 requests per second. No empty-account
-response was forced and no overflow route is claimed. See
-[ZeroBounce](../architecture/zerobounce.md).
+response was forced and no overflow route is claimed.
 
 `collectors._moltsets` reads the free account envelope and reports the tighter rolling enrichment
 record remainder, with both enrichment/search request and record pools in its note. Missing
 enrichment windows produce unknown capacity rather than substituting the separate token/phone
 balance. Its `rolling_quota` type means the quota is measured over rolling windows; the explicit
 10/second smoothing policy is a routing pace, not a reinterpretation of the 5,000-request/5h
-capacity allowance. See [MoltSets](../architecture/moltsets.md).
+capacity allowance.
 
-`collectors._sumble` reads `credits_remaining` from a free technology-search miss. Its monthly allowance and optional vendor top-ups remain separate from per-call pricing; no renewal date or auto-funding status is assumed. See [Sumble](../architecture/sumble.md).
+`collectors._sumble` reads `credits_remaining` from a free technology-search miss. Its monthly allowance and optional vendor top-ups remain separate from per-call pricing; no renewal date or auto-funding status is assumed.
 
 `collectors._getleadsio` reads numeric nonnegative `credits_remaining` from the free fair-use route.
 It represents the promotional database-credit allocation, not the separate Live Leads wallet.
 Default smoothing is the documented 100 requests per minute. An exact observed zero publishes the
 normal exhausted state: platform calls then receive the shared typed 503 with an own-key instruction
 before reserve, while BYOK remains available. No empty-account response was forced, so the upstream
-exhaustion signature remains unrecorded and no overflow route is claimed. See [GetLeads.io](../architecture/getleadsio.md).
+exhaustion signature remains unrecorded and no overflow route is claimed.
 
 Financial Datasets uses the existing capacity path with `_KNOWN` policy
 `credits / auto_recharge / manual`. The official API publishes no free balance or usage endpoint,
@@ -149,7 +198,7 @@ they do not replace the spendable total. The default policy is `credits / manual
 `scripts/provider_balances.py` needs no provider branch because the typed platform-key setting and
 the shared collector table discover Dropleads automatically. The free trial was not exhausted, so
 the actual upstream exhaustion response is acknowledged as unrecorded and no overflow route is
-enabled. See [Dropleads](../architecture/dropleads.md).
+enabled.
 
 ## Prospeo subscriptions
 
@@ -171,8 +220,7 @@ selects the shared collector. The collector reads its key setting independently 
 allow-list so disabling a provider does not hide its last balance check. A focused live
 reconciliation matched one paid one-credit call beside two free calls without exposing the key.
 The Starter allowance was not exhausted, so its provider-specific exhaustion response remains in
-the acknowledged-unrecorded set and no overflow route is claimed. See
-[Prospeo](../architecture/prospeo.md).
+the acknowledged-unrecorded set and no overflow route is claimed.
 
 ## Wiza prepaid API credits
 
@@ -189,15 +237,14 @@ smoothing is not endpoint-aware. This spaces sequential platform calls by about 
 about 38 seconds of waiting across 20 one-row search pages; BYOK is unaffected. The bounded,
 process-local limiter reduces ordinary bursts but is not a strict quota gate: calls whose computed
 wait exceeds `DEFAULT_MAX_WAIT_MS` proceed. Relax the ceiling after real 429 evidence, or when
-smoothing becomes endpoint-aware. The public replacement rate and platform/BYOK boundary are
-documented in [Wiza](../architecture/wiza.md).
+smoothing becomes endpoint-aware.
 
 ## Pieces (`src/treg/domain/capacity/`)
 
 - **`collectors.py`** — the providers' *free* balance/quota calls (`coroutine(client, key) →
   {value, unit, note}`), shared with `scripts/provider_balances.py`. Providers such as DataForSEO,
   TikHub, Brightdata, and Kitt AI report balances in USD; other meters include credits, rows, and searches. `NO_BALANCE_API`
-  names the 9 providers that publish no free standalone meter so they read as "no API", never as a
+  names providers that publish no free standalone meter so they read as "no API", never as a
   broken key. Scrubby reports `remaining_credits` only on verification responses; collection never
   spends a verification merely to obtain that value.
   `provider_balance()` never raises — a failure is a row. It reads the *setting*, not
@@ -477,8 +524,7 @@ results varied, so no numeric free-plan concurrency/rate limit is configured.
 not a scalar balance. `snapshot_from` and `latest_state` preserve it without marking the provider
 exhausted. Prepaid quotas are already remaining credits. The pools are independent and require
 separate operator monitoring and top-ups. Stats freshness remains unconfirmed; treg
-keeps the existing sweep cadence and does not assume behavior at zero credits. See
-[ContactOut](../architecture/contactout.md).
+keeps the existing sweep cadence and does not assume behavior at zero credits.
 
 ContactOut overflow now has verified routes on Orthogonal and Monid, using the same price gates,
 expiry, opt-out and budget controls. Its documented out-of-credit 403 is endpoint-scoped quota,
@@ -492,5 +538,4 @@ remain private operational state.
 A spent prepaid wallet or a key's own spend cap answers `402`. Observed 2026-09-19 by driving a
 trial key past its cap: `{"error": "trial_cap_reached"}`, recorded in `signatures._TABLE` as a
 `balance` signal. The funded-wallet body ("insufficient wallet balance", per its OpenAPI 402
-description) matches the same row but has not been observed. No overflow route is claimed. See
-[AnyAPI](../architecture/anyapi.md).
+description) matches the same row but has not been observed. No overflow route is claimed.

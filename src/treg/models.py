@@ -9,9 +9,16 @@ so every list/call/mutation is scoped to the caller's org. See docs/MULTI-TENANC
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from typing import Annotated
 
+from pydantic import NaiveDatetime
 from sqlalchemy import BigInteger, Boolean, JSON, CheckConstraint, Column, Index, Integer, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
+
+# SQLModel 0.0.45+ rejects naive datetime binds unless fields are annotated with NaiveDatetime.
+# Our schema is intentionally TIMESTAMP WITHOUT TIME ZONE (migration 0017), and `_now()` returns
+# naive UTC. This alias makes every datetime field and query bind work under the new validation.
+NaiveUTC = Annotated[datetime, NaiveDatetime]
 
 # Role ordering for gates (owner > admin > member > viewer).
 # viewer = read + call only (cannot register/manage); member+ can register tools/secrets/skills.
@@ -75,13 +82,13 @@ class Org(SQLModel, table=True):
     # WHEN the org agreed to the threshold/amount it is being charged on. The MIT mandate: a compliance
     # record, which is why it is a timestamp and not a boolean — "they ticked a box at some point" is
     # not defensible in a dispute, "they agreed on 2026-07-30T11:02Z" is.
-    autotopup_consented_at: datetime | None = Field(default=None)
+    autotopup_consented_at: NaiveUTC | None = Field(default=None)
     # Why auto-top-up turned itself OFF (e.g. "authentication_required", "max_attempts"). Non-null is
     # the banner the dashboard shows: a silent disable is how an org discovers its agents are broken.
     autotopup_disabled_reason: str | None = Field(default=None)
     # Cross-instance cooldown: the DB, not a process-local lock, is what stops two web workers (or a
     # burst of concurrent calls) from firing two charges as the balance crosses the threshold.
-    autotopup_last_attempt_at: datetime | None = Field(default=None)
+    autotopup_last_attempt_at: NaiveUTC | None = Field(default=None)
     autotopup_failures: int = Field(default=0)  # CONSECUTIVE failures; a success resets it to 0
     # A PaymentIntent that needs the cardholder present (3DS). Kept so the dashboard can offer an
     # on-session "finish this payment" link instead of starting a fresh charge the bank will re-decline.
@@ -107,7 +114,7 @@ class Org(SQLModel, table=True):
     ad_gclid: str | None = Field(default=None)
     # Which mutually-exclusive Google click-id field ad_gclid contains. NULL means a legacy GCLID.
     ad_click_id_type: str | None = Field(default=None)  # gclid | gbraid | wbraid
-    ad_click_at: datetime | None = Field(default=None)
+    ad_click_at: NaiveUTC | None = Field(default=None)
     ad_landing: str | None = Field(default=None)  # utm_content — the landing page id (p1…p5)
     # ---- traffic-source attribution (see web/sitetrack.js) --------------------------------------
     # First-touch `utm_*` + referring host, captured as the first-party `treg_utm` cookie on the
@@ -122,9 +129,9 @@ class Org(SQLModel, table=True):
     utm_referrer: str | None = Field(default=None)  # referring hostname, e.g. botdirectory.ai
     # Set ONCE, by a guarded UPDATE in the /call/ handler. Deliberately not derived from CallRecord:
     # audit.py sheds rows past its queue bound, so a derived value undercounts exactly under load.
-    first_call_at: datetime | None = Field(default=None)
+    first_call_at: NaiveUTC | None = Field(default=None)
 
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
     # Opt-OUT of overflow (docs/context/ops/capacity.md): when treg's own account for a provider is
     # out, a metered call may be served through a treg-owned aggregator account on the same endpoint.
     # Default allowed (disclosed via X-Treg-Served-Via); a team that must not have its requests
@@ -143,7 +150,7 @@ class User(SQLModel, table=True):
     email: str = Field(index=True, unique=True)
     # Only an inbox proof or a provider-verified email can set this. Legacy /users and
     # admin-visible invitation codes are not email proofs.
-    email_verified_at: datetime | None = Field(default=None)
+    email_verified_at: NaiveUTC | None = Field(default=None)
     # Consumed atomically with the signup grant; survives leaving/deleting every team.
     # The DB default is false so pre-upgrade users and old writers never gain a fresh claim.
     signup_promo_available: bool = Field(
@@ -161,7 +168,7 @@ class User(SQLModel, table=True):
     # same human unlimited codes to farm with. NULL until they open the Referrals page; minted lazily
     # so we never generate codes for the majority who never look. See referrals.py.
     referral_code: str | None = Field(default=None, index=True, unique=True)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Membership(SQLModel, table=True):
@@ -210,7 +217,7 @@ class Membership(SQLModel, table=True):
     # api._parse_call_meta): otherwise whoever holds the token could retag their calls and walk straight out
     # of their own budget, which is the entire point of giving them a scoped token. NULL = unpinned.
     pinned_tags: dict | None = Field(default=None, sa_column=Column("pinned_tags", JSON, nullable=True))
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class ApiKey(SQLModel, table=True):
@@ -251,11 +258,11 @@ class ApiKey(SQLModel, table=True):
     # membership's previously issued Default token stops working; no replacement row is needed.
     default_generation: int = Field(default=0)
     created_by: str = Field(default="")
-    created_at: datetime = Field(default_factory=_now)
-    last_used_at: datetime | None = Field(default=None)
-    disabled_at: datetime | None = Field(default=None)
-    revoked_at: datetime | None = Field(default=None)
-    deleted_at: datetime | None = Field(default=None)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    last_used_at: NaiveUTC | None = Field(default=None)
+    disabled_at: NaiveUTC | None = Field(default=None)
+    revoked_at: NaiveUTC | None = Field(default=None)
+    deleted_at: NaiveUTC | None = Field(default=None)
     replacement_key_id: int | None = Field(default=None)
 
 
@@ -268,7 +275,7 @@ class ApiKeyEvent(SQLModel, table=True):
     actor_email: str = Field(default="", index=True)
     identity_label: str = Field(default="")
     action: str = Field(index=True)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Invite(SQLModel, table=True):
@@ -290,7 +297,7 @@ class Invite(SQLModel, table=True):
     email_token_hash: str | None = Field(default=None, index=True)  # inbox-only sign-in secret (see docstring)
     status: str = Field(default="pending")  # pending | accepted | revoked
     invited_by: str = Field(default="")  # inviter email (audit)
-    expires_at: datetime | None = Field(default=None)  # one-time AND time-bounded; None = never
+    expires_at: NaiveUTC | None = Field(default=None)  # one-time AND time-bounded; None = never
     # Access to seed onto the membership when this invite is accepted (requirement: set access at invite
     # time, modify later). NULL tool_access = all tools; a list = the allowed tool names.
     tool_access: list | None = Field(default=None, sa_column=Column("tool_access", JSON, nullable=True))
@@ -300,7 +307,7 @@ class Invite(SQLModel, table=True):
     # Where the invitee lands after sign-in — a shared detail page ("/app/skills/<name>") when the
     # invite was minted from a share, else NULL for the plain dashboard. Path-only, validated on create.
     landing: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class CallRecord(SQLModel, table=True):
@@ -413,7 +420,7 @@ class CallRecord(SQLModel, table=True):
     budget_dim: str = Field(default="")
     budget_val: str = Field(default="", index=True)
     tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
     # True when the archive served this answer instead of the vendor (X-Treg-Cache: hit).
     # Money columns stay identical to a live call on purpose — pricing a hit is a deferred
     # founder decision (docs/context/architecture/archive.md). Declared LAST to match the
@@ -456,7 +463,10 @@ class RunRecord(SQLModel, table=True):
     api_key_id: int | None = Field(default=None)
     api_key_name: str | None = Field(default=None)
     api_key_prefix: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
+
+    # Attribution snapshot: never infer ownership from a current membership or lossy audit.
+    tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
 
 
 class Bundle(SQLModel, table=True):
@@ -478,7 +488,7 @@ class Bundle(SQLModel, table=True):
     # nested paths allowed (e.g. "reference/fields.md", "scripts/run.py"). Excludes secrets + binaries;
     # `skill install` reconstructs the tree. Text only — a skill folder is assumed small.
     files: dict = Field(default_factory=dict, sa_column=Column("files", JSON))
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Ephemeral(SQLModel, table=True):
@@ -493,7 +503,7 @@ class Ephemeral(SQLModel, table=True):
     ns: str = Field(primary_key=True)
     k: str = Field(primary_key=True)
     v: dict = Field(default_factory=dict, sa_column=Column("v", JSON, nullable=False))
-    expires_at: datetime = Field(index=True)
+    expires_at: NaiveUTC = Field(index=True)
 
 
 class PendingOAuth(SQLModel, table=True):
@@ -544,7 +554,7 @@ class PendingOAuth(SQLModel, table=True):
     status: str = Field(default="pending")  # pending | done | error
     secret_id: int | None = Field(default=None)
     detail: str = Field(default="")
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Secret(SQLModel, table=True):
@@ -563,7 +573,7 @@ class Secret(SQLModel, table=True):
     # Freshness/validity — set by the health runner (Phase B). status: unknown | ok | invalid.
     health_status: str = Field(default="unknown")
     health_detail: str = Field(default="")
-    health_checked_at: datetime | None = Field(default=None)
+    health_checked_at: NaiveUTC | None = Field(default=None)
 
     # Connection metadata (registry connects — see oauth_providers.py). Empty `provider` means this
     # credential did not come from the registry (uploaded, or a bring-your-own-app connect).
@@ -581,11 +591,11 @@ class Secret(SQLModel, table=True):
     # expiry answers "how long will it keep working". A non-refreshable token (LinkedIn issues no
     # refresh_token at the non-partner tier) is perfectly healthy right up until it silently dies,
     # so it has to be surfaced on its own or the user gets no warning at all.
-    expires_at: datetime | None = Field(default=None)
-    last_refresh_at: datetime | None = Field(default=None)
+    expires_at: NaiveUTC | None = Field(default=None)
+    last_refresh_at: NaiveUTC | None = Field(default=None)
     last_error: str = Field(default="")
 
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class AdConversion(SQLModel, table=True):
@@ -613,12 +623,12 @@ class AdConversion(SQLModel, table=True):
     value_usd_micro: int = Field(default=0)  # converted to AUD at upload time, never stored as AUD
     # Naive UTC (no tzinfo): columns are TIMESTAMP WITHOUT TIME ZONE, and Postgres rejects tz-aware
     # values into naive columns. Use _now (defined above) to stay consistent with other tables.
-    created_at: datetime = Field(default_factory=_now)
-    uploaded_at: datetime | None = Field(default=None, index=True)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    uploaded_at: NaiveUTC | None = Field(default=None, index=True)
     # Retryable failures wait here with exponential backoff. Terminal per-row failures keep the
     # outbox row and error for inspection rather than being mislabeled as uploaded or disappearing.
-    next_attempt_at: datetime | None = Field(default=None, index=True)
-    failed_at: datetime | None = Field(default=None, index=True)
+    next_attempt_at: NaiveUTC | None = Field(default=None, index=True)
+    failed_at: NaiveUTC | None = Field(default=None, index=True)
     attempts: int = Field(default=0)
     error: str = Field(default="")
 
@@ -656,7 +666,7 @@ class Tool(SQLModel, table=True):
     # projects, so adding this changed nothing. A project is a LABEL + ACL scope, never a namespace:
     # `name` stays unique per (org_id, name), so no unique constraint had to be rebuilt. See models.Project.
     project_id: int | None = Field(default=None, foreign_key="project.id", index=True)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class CapabilityPin(SQLModel, table=True):
@@ -694,7 +704,7 @@ class CapabilityPin(SQLModel, table=True):
     capability: str = Field(index=True)         # e.g. "people.email.find"
     provider: str                               # a catalog provider service id, e.g. "hunter"
     created_by: str = Field(default="")         # the admin who set it — pins outlive their author
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class DenyRule(SQLModel, table=True):
@@ -729,7 +739,7 @@ class DenyRule(SQLModel, table=True):
     verdict: str = Field(default="deny")  # deny | approve (approve = reserved, see docstring)
     note: str = Field(default="")  # why this exists — shown in the refusal so it names its source
     created_by: str = Field(default="")  # admin email (audit)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class CreditBlock(SQLModel, table=True):
@@ -750,7 +760,7 @@ class CreditBlock(SQLModel, table=True):
     amount_micro: int  # granted amount, micro-USD (1e-6 USD) — never mutated
     remaining_micro: int  # what's left to spend from this block
     currency: str = Field(default="USD")
-    expires_at: datetime | None = Field(default=None)
+    expires_at: NaiveUTC | None = Field(default=None)
     # The already-authorized payment this block was funded by (phase 4). Doubles as the idempotency
     # key for ledger.topup — a redelivered webhook must not credit twice. **UNIQUE**, because the
     # check in `topup` is a SELECT then an INSERT: two concurrent deliveries of the same PaymentIntent
@@ -759,7 +769,7 @@ class CreditBlock(SQLModel, table=True):
     # be the one that says no. NULL is exempt from a unique index, so promo blocks are unaffected.
     stripe_payment_intent: str | None = Field(
         default=None, index=True, sa_column_kwargs={"unique": True})
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class LedgerEntry(SQLModel, table=True):
@@ -794,7 +804,7 @@ class LedgerEntry(SQLModel, table=True):
     endpoint_id: str | None = Field(default=None)
     # Free-form provenance: estimated vs observed cost, the margin applied, payment ref, shortfalls.
     meta: dict = Field(default_factory=dict, sa_column=Column("meta", JSON))
-    created_at: datetime = Field(default_factory=_now, index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
 
 
 class Hold(SQLModel, table=True):
@@ -810,7 +820,7 @@ class Hold(SQLModel, table=True):
     org_id: int = Field(foreign_key="org.id", index=True)
     endpoint_id: str = Field(default="")
     amount_micro: int  # what was withheld from the balance (margin already applied)
-    created_at: datetime = Field(default_factory=_now, index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
 
 
 class AsyncTaskRecord(SQLModel, table=True):
@@ -831,15 +841,18 @@ class AsyncTaskRecord(SQLModel, table=True):
     # from this row alone, whatever the catalog says by the time the task finishes.
     settlement_basis: dict = Field(
         default_factory=dict, sa_column=Column("settlement_basis", JSON, nullable=False))
-    created_at: datetime = Field(default_factory=_now, index=True)
-    next_check_at: datetime = Field(index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
+    next_check_at: NaiveUTC = Field(index=True)
     attempts: int = Field(default=0)
     consecutive_failures: int = Field(
         default=0, sa_column=Column(Integer, nullable=False, server_default="0"))
     status: str = Field(default="pending", index=True)
     error: str = Field(default="")
     settled_micro: int | None = Field(default=None)
-    completed_at: datetime | None = Field(default=None, index=True)
+    completed_at: NaiveUTC | None = Field(default=None, index=True)
+
+    # Attribution snapshot: never infer ownership from a current membership or lossy audit.
+    tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
 
 
 class AsyncResourceRecord(SQLModel, table=True):
@@ -858,7 +871,43 @@ class AsyncResourceRecord(SQLModel, table=True):
     resource_kind: str = Field(index=True)
     resource_id: str = Field(index=True)
     source_call_id: str = Field(index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
+
+    # Attribution snapshot: never infer ownership from a current membership or lossy audit.
+    tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
+
+
+class ProviderResource(SQLModel, table=True):
+    """A durable object created with treg's shared provider credential for one organization.
+
+    Unlike ``AsyncResourceRecord`` (short-lived poll/fetch ids), these rows are user-visible
+    resources with a lifecycle: voices today, and later phone numbers or mailboxes.  BYOK objects
+    never enter this table because the provider account already supplies their tenancy boundary.
+    """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "resource_kind", "upstream_id",
+            name="uq_providerresource_provider_kind_upstream",
+        ),
+        Index(
+            "ix_providerresource_org_provider_kind_status",
+            "org_id", "provider", "resource_kind", "status",
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    org_id: int = Field(foreign_key="org.id", index=True)
+    provider: str = Field(index=True)
+    resource_kind: str = Field(index=True)
+    upstream_id: str = Field(index=True)
+    display_name: str = Field(default="")
+    created_by: str = Field(default="")
+    source_call_id: str = Field(default="", index=True)
+    status: str = Field(default="active", index=True)  # active | deleted
     created_at: datetime = Field(default_factory=_now, index=True)
+    updated_at: datetime = Field(default_factory=_now)
+    deleted_at: datetime | None = Field(default=None, index=True)
 
 
 class TagSpend(SQLModel, table=True):
@@ -893,7 +942,7 @@ class TagSpend(SQLModel, table=True):
     # it settles. A cap reads both.
     settled: bool = Field(default=False)
     amount_micro: int = Field(default=0)
-    created_at: datetime = Field(default_factory=_now, index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
 
 
 class TagBudget(SQLModel, table=True):
@@ -937,8 +986,8 @@ class TagBudget(SQLModel, table=True):
     # answer from before they were blocked.
     status: str = Field(default="active")
     note: str = Field(default="")
-    created_at: datetime = Field(default_factory=_now)
-    updated_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Referral(SQLModel, table=True):
@@ -994,9 +1043,9 @@ class Referral(SQLModel, table=True):
     referred_block_id: str | None = Field(default=None)
     referrer_reward_micro: int = Field(default=0)  # what was actually granted, not what was promised
     referred_reward_micro: int = Field(default=0)
-    qualified_at: datetime | None = Field(default=None)
-    paid_at: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now, index=True)
+    qualified_at: NaiveUTC | None = Field(default=None)
+    paid_at: NaiveUTC | None = Field(default=None)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
 
 
 class Project(SQLModel, table=True):
@@ -1019,7 +1068,7 @@ class Project(SQLModel, table=True):
     name: str
     slug: str = Field(index=True)  # the human handle inside the org
     created_by: str = Field(default="")
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class OAuthClient(SQLModel, table=True):
@@ -1053,9 +1102,9 @@ class OAuthClient(SQLModel, table=True):
     redirect_uris: list = Field(default_factory=list,
                                 sa_column=Column("redirect_uris", JSON, nullable=False))
     scope: str = Field(default="")
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
     # cimd only: documents change, so a cached copy has to be refreshable rather than permanent.
-    refreshed_at: datetime | None = Field(default=None)
+    refreshed_at: NaiveUTC | None = Field(default=None)
 
 
 class OAuthCode(SQLModel, table=True):
@@ -1091,8 +1140,8 @@ class OAuthCode(SQLModel, table=True):
     code_challenge: str = Field(default="")
     resource: str = Field(default="")
     scope: str = Field(default="")
-    expires_at: datetime
-    created_at: datetime = Field(default_factory=_now)
+    expires_at: NaiveUTC
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class OAuthGrant(SQLModel, table=True):
@@ -1109,7 +1158,7 @@ class OAuthGrant(SQLModel, table=True):
 
     family_id: str = Field(primary_key=True)
     current_org_id: int = Field(foreign_key="org.id", index=True)
-    granted_at: datetime = Field(default_factory=_now)
+    granted_at: NaiveUTC = Field(default_factory=_now)
 
 
 class OAuthRefresh(SQLModel, table=True):
@@ -1140,11 +1189,11 @@ class OAuthRefresh(SQLModel, table=True):
     org_id: int = Field(foreign_key="org.id", index=True)
     resource: str = Field(default="")
     scope: str = Field(default="")
-    expires_at: datetime
-    created_at: datetime = Field(default_factory=_now)
+    expires_at: NaiveUTC
+    created_at: NaiveUTC = Field(default_factory=_now)
     # Set when this row is superseded or killed. A row is kept rather than deleted precisely so a
     # replay can be RECOGNISED — deleting it would make a stolen token look merely unknown.
-    retired_at: datetime | None = Field(default=None)
+    retired_at: NaiveUTC | None = Field(default=None)
     retired_reason: str = Field(default="")
 
 
@@ -1206,8 +1255,8 @@ class IdempotentCall(SQLModel, table=True):
     response_body: bytes | None = Field(default=None)
     response_media_type: str = Field(default="")
     charged_micro: int = Field(default=0)
-    created_at: datetime = Field(default_factory=_now)
-    expires_at: datetime
+    created_at: NaiveUTC = Field(default_factory=_now)
+    expires_at: NaiveUTC
 
 
 class Feedback(SQLModel, table=True):
@@ -1225,7 +1274,9 @@ class Feedback(SQLModel, table=True):
     call_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     verified_call_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     endpoint_id: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now)
+    # Attribution snapshot: never infer ownership from a current membership or lossy audit.
+    tags: dict | None = Field(default=None, sa_column=Column("tags", JSON, nullable=True))
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class HubTool(SQLModel, table=True):
@@ -1307,7 +1358,7 @@ class FeedbackHandling(SQLModel, table=True):
     status: str = Field(default="open")
     assignee: str | None = Field(default=None)
     version: int = Field(default=0)
-    updated_at: datetime = Field(default_factory=_now)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class FeedbackHandlingEvent(SQLModel, table=True):
@@ -1331,7 +1382,7 @@ class FeedbackHandlingEvent(SQLModel, table=True):
     links: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     actor: str
     source: str
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class CallReview(SQLModel, table=True):
@@ -1350,7 +1401,7 @@ class CallReview(SQLModel, table=True):
     client: str = Field(default="")
     usefulness: str
     reason: str | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class Media(SQLModel, table=True):
@@ -1366,8 +1417,8 @@ class Media(SQLModel, table=True):
     content_type: str
     size: int = Field(default=0)
     body: bytes
-    created_at: datetime = Field(default_factory=_now)
-    expires_at: datetime = Field(index=True)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    expires_at: NaiveUTC = Field(index=True)
 
 
 class ToolRequest(SQLModel, table=True):
@@ -1392,7 +1443,7 @@ class ToolRequest(SQLModel, table=True):
     contact: str = Field(default="")  # optional reach-back (email/handle); free text, unverified
     source: str = Field(default="web", index=True)  # web | cli | mcp | claude-connector | api
     status: str = Field(default="open", index=True)  # open | done | dismissed — flipped by hand
-    created_at: datetime = Field(default_factory=_now, index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
 
 
 class SearchMiss(SQLModel, table=True):
@@ -1412,7 +1463,45 @@ class SearchMiss(SQLModel, table=True):
     query: str  # the search text that matched nothing, capped by the writer
     # api (HTTP /catalog/search: web + CLI) | mcp | claude-connector
     source: str = Field(default="api", index=True)
+    created_at: NaiveUTC = Field(default_factory=_now, index=True)
+
+
+class SearchLog(SQLModel, table=True):
+    """One MCP catalog search under the discovery experiment (`application.search_experiment`):
+    what the lexical ranker answered, what the relevance judge answered, and what was SHOWN.
+
+    The experiment has no labels. Its signal is behaviour: a `call` by the same caller, soon after,
+    to an endpoint that was on the page. That join needs the page as it was served and, for an
+    interleaved page, which ranker put each row there — so the row keeps both full lists and the
+    per-row owner rather than a summary. `baseline_total` (0 = the lexical gate admitted nothing)
+    is the stratum: recall gain and ranking gain are different claims and are read separately.
+
+    Carries identity, unlike `SearchMiss`, because the caller's later call is the outcome — an
+    anonymous row has no outcome to join. Written fire-and-forget through `audit.record_search`;
+    a dropped row costs one sample, never a search. The judge's timings and errors ride along so
+    the latency guardrail reads from the same table as the effect.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
     created_at: datetime = Field(default_factory=_now, index=True)
+    source: str = Field(default="mcp", index=True)          # mcp | claude-connector
+    query: str                                               # capped by the writer
+    org_id: int | None = Field(default=None, index=True)
+    user_email: str | None = Field(default=None)
+    mode: str                                                # shadow | interleave
+    arm: str                                                 # shadow | baseline | judged | interleave
+    # [endpoint_id, ...] — the lexical page as the caller would have seen it without the experiment
+    baseline_ids: list | None = Field(default=None, sa_column=Column("baseline_ids", JSON, nullable=True))
+    # [[endpoint_id, probability], ...] — the judge's kept rows, in the order the judged arm shows
+    judged: list | None = Field(default=None, sa_column=Column("judged", JSON, nullable=True))
+    # [[endpoint_id, owner], ...] — the page actually served; owner is baseline | judged | both
+    shown: list | None = Field(default=None, sa_column=Column("shown", JSON, nullable=True))
+    baseline_total: int = 0                                  # lexical matches before the page cut
+    differs: bool = False                                    # the two pages are not the same set+order
+    judge_ms: int | None = Field(default=None)
+    judge_tokens_in: int | None = Field(default=None)
+    judge_tokens_out: int | None = Field(default=None)
+    judge_error: str | None = Field(default=None)            # timeout | http_<status> | <exception>; None = answered
 
 
 class CapacityPolicy(SQLModel, table=True):
@@ -1433,7 +1522,7 @@ class CapacityPolicy(SQLModel, table=True):
     source: str = Field(default="none")             # api | headers | calculated | manual | none
     funding_mode: str = Field(default="unknown")    # auto_recharge | auto_upgrade | manual | quota_reset | unknown
     auto_funding_enabled: bool = Field(default=False)
-    auto_funding_verified_at: datetime | None = Field(default=None)
+    auto_funding_verified_at: NaiveUTC | None = Field(default=None)
     auto_trigger_below: float | None = Field(default=None)  # in the provider's own unit
     auto_amount: float | None = Field(default=None)
     auto_ceiling: float | None = Field(default=None)
@@ -1452,8 +1541,8 @@ class CapacityPolicy(SQLModel, table=True):
     # {"limit": int, "period": "day|month|billing", "resets_at_rule": str} — the period allowance
     quota: dict | None = Field(default=None, sa_column=Column("quota", JSON, nullable=True))
     enabled: bool = Field(default=True)  # a slot with no key in the env is imported disabled
-    created_at: datetime = Field(default_factory=_now)
-    updated_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class CapacitySnapshot(SQLModel, table=True):
@@ -1466,11 +1555,11 @@ class CapacitySnapshot(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     provider: str = Field(index=True)
-    observed_at: datetime = Field(default_factory=_now, index=True)
+    observed_at: NaiveUTC = Field(default_factory=_now, index=True)
     remaining: float | None = Field(default=None)
     total: float | None = Field(default=None)
     unit: str = Field(default="")
-    resets_at: datetime | None = Field(default=None)
+    resets_at: NaiveUTC | None = Field(default=None)
     source: str = Field(default="api")           # api | headers | calculated | manual
     confidence: str = Field(default="exact")     # exact | estimate | stale
     note: str = Field(default="")
@@ -1501,9 +1590,9 @@ class OverflowRoute(SQLModel, table=True):
     single_result: bool | None = Field(default=None)  # a per-result aggregator route that returns ≤ 1 record
     enabled: bool = Field(default=False, index=True)
     disabled_reason: str = Field(default="")
-    matched_at: datetime | None = Field(default=None)
-    last_verified_at: datetime | None = Field(default=None)
-    updated_at: datetime = Field(default_factory=_now)
+    matched_at: NaiveUTC | None = Field(default=None)
+    last_verified_at: NaiveUTC | None = Field(default=None)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class OverflowSpend(SQLModel, table=True):
@@ -1520,7 +1609,7 @@ class OverflowSpend(SQLModel, table=True):
     calls: int = Field(default=0)
     cost_micro: int = Field(default=0)
     delta_micro: int = Field(default=0)
-    updated_at: datetime = Field(default_factory=_now)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class ArchiveKey(SQLModel, table=True):
@@ -1557,16 +1646,16 @@ class ArchiveKey(SQLModel, table=True):
     policy: str = Field(default="forbidden")       # effective policy when last written (see archive)
     # --- timer (AIMD) ---
     ttl_s: int = Field(default=0)                  # current per-key timer; 0 = no serving opinion yet
-    fetched_at: datetime = Field(default_factory=_now, index=True)  # newest snapshot's fetch time
+    fetched_at: NaiveUTC = Field(default_factory=_now, index=True)  # newest snapshot's fetch time
     # --- change statistics (the learner's evidence) ---
     change_seen: int = Field(default=0)            # eligible observations classified changed
     stable_seen: int = Field(default=0)            # positive observations classified stable
-    last_changed_at: datetime | None = Field(default=None)
+    last_changed_at: NaiveUTC | None = Field(default=None)
     volatile_paths: list = Field(default_factory=list, sa_column=Column(JSON))
     # --- demand (what earns a refresh) ---
     heat: float = Field(default=0.0)               # decayed request rate, updated on each hit/miss
-    last_requested_at: datetime | None = Field(default=None)
-    created_at: datetime = Field(default_factory=_now)
+    last_requested_at: NaiveUTC | None = Field(default=None)
+    created_at: NaiveUTC = Field(default_factory=_now)
     # The pre-injection request shape, stored so the refresh worker can re-ask the exact question.
     # Credentials cannot appear here: injection happens inside the relay, after this shape is
     # fixed. Declared LAST to match the migration's ALTER TABLE append position.
@@ -1623,7 +1712,7 @@ class ArchiveSnapshot(SQLModel, table=True):
     body: bytes | None = Field(default=None)       # verbatim bytes, or NULL when body_of is set
     body_of: int | None = Field(default=None, foreign_key="archivesnapshot.id")
     size_bytes: int = Field(default=0)             # of the raw body, even when deduplicated
-    fetched_at: datetime = Field(default_factory=_now, index=True)
+    fetched_at: NaiveUTC = Field(default_factory=_now, index=True)
     # Who triggered the fetch: "caller" (a real request) | "refresh" (worker) | "sample" (learner).
     origin: str = Field(default="caller")
     # How `body` is stored on disk: NULL = raw bytes (all rows before 0014), "zlib" = compressed.
@@ -1656,8 +1745,8 @@ class ArchiveKeyOrg(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     org_id: int = Field(index=True)
     key_hash: str = Field(index=True)
-    first_call_at: datetime = Field(default_factory=_now)
-    last_call_at: datetime = Field(default_factory=_now)
+    first_call_at: NaiveUTC = Field(default_factory=_now)
+    last_call_at: NaiveUTC = Field(default_factory=_now)
     calls: int = Field(default=1)
 
 
@@ -1673,11 +1762,11 @@ class ArenaRun(SQLModel, table=True):
     mode: str
     state: str = "running"
     payload: str
-    created_at: datetime = Field(default_factory=_now)
-    deadline_at: datetime
-    expires_at: datetime = Field(index=True)
+    created_at: NaiveUTC = Field(default_factory=_now)
+    deadline_at: NaiveUTC
+    expires_at: NaiveUTC = Field(index=True)
     cancel_requested: bool = False
-    revealed_at: datetime | None = None
+    revealed_at: NaiveUTC | None = None
 
 
 class ArenaEvaluation(SQLModel, table=True):
@@ -1689,7 +1778,7 @@ class ArenaEvaluation(SQLModel, table=True):
     user_id: int
     kind: str
     payload: str  # encrypted selection, exposure snapshot, reasons and optional comment
-    created_at: datetime = Field(default_factory=_now)
+    created_at: NaiveUTC = Field(default_factory=_now)
 
 
 class ArchiveEndpointStat(SQLModel, table=True):
@@ -1708,7 +1797,7 @@ class ArchiveEndpointStat(SQLModel, table=True):
     snapshots: int = Field(default=0)              # versions stored (bodies + dedup references)
     bodies_kept: int = Field(default=0)            # versions whose bytes were kept
     kept_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, server_default="0"))  # already past int32 on prod
-    newest_fetch: datetime | None = Field(default=None)
+    newest_fetch: NaiveUTC | None = Field(default=None)
 
 
 class ArenaObservation(SQLModel, table=True):
@@ -1723,15 +1812,15 @@ class ArenaObservation(SQLModel, table=True):
     request_hash: str
     category: str
     duration_ms: int | None = None
-    created_at: datetime
+    created_at: NaiveUTC
 
 
 class ArenaInsightState(SQLModel, table=True):
     """Persistent collection cursor and public aggregate, never raw request/response content."""
     id: str = Field(primary_key=True)
     cursor: int = 0
-    scan_until: datetime
-    updated_at: datetime | None = None
+    scan_until: NaiveUTC
+    updated_at: NaiveUTC | None = None
     payload: dict = Field(default_factory=dict, sa_column=Column(JSON, nullable=False))
 
 
@@ -1739,7 +1828,7 @@ class ArenaVerificationSnapshot(SQLModel, table=True):
     """Published aggregate only; private contact evidence never enters this table."""
     id: str = Field(primary_key=True)
     source_digest: str
-    published_at: datetime = Field(index=True)
+    published_at: NaiveUTC = Field(index=True)
     payload: dict = Field(default_factory=dict, sa_column=Column(JSON))
 
 
@@ -1761,14 +1850,14 @@ class EndpointDayStat(SQLModel, table=True):
     n: int = Field(default=0)              # rows the provider actually saw (refused_by IS NULL)
     ok: int = Field(default=0)             # 2xx
     bad: int = Field(default=0)            # 5xx, plus 405 (a stale catalog contract, see stats)
-    last_ok_at: datetime | None = Field(default=None)
+    last_ok_at: NaiveUTC | None = Field(default=None)
     hits: int = Field(default=0)
     hit_decided: int = Field(default=0)
     paid_hits: int = Field(default=0)      # per_success fallback rows, see stats.observed
     free_misses: int = Field(default=0)
     latency_seen: int = Field(default=0)   # successful rows with a duration, for the reservoir
     latency_sample: list = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
-    updated_at: datetime = Field(default_factory=_now)
+    updated_at: NaiveUTC = Field(default_factory=_now)
 
 
 class EndpointStatCursor(SQLModel, table=True):
@@ -1780,6 +1869,6 @@ class EndpointStatCursor(SQLModel, table=True):
 
     id: str = Field(primary_key=True)
     cursor_id: int = Field(default=0)             # last consumed CallRecord.id
-    watermark: datetime | None = Field(default=None)  # created_at of the last consumed row
-    caught_up_at: datetime | None = Field(default=None)
-    updated_at: datetime = Field(default_factory=_now)
+    watermark: NaiveUTC | None = Field(default=None)  # created_at of the last consumed row
+    caught_up_at: NaiveUTC | None = Field(default=None)
+    updated_at: NaiveUTC = Field(default_factory=_now)

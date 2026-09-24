@@ -11,6 +11,7 @@ Pure collection: nothing here touches the database or the request path. The work
 from __future__ import annotations
 
 import math
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -38,6 +39,103 @@ async def _tikhub(c, key):
     d = await _get(c, "https://api.tikhub.io/api/v1/tikhub/user/get_user_info",
                    headers={"Authorization": f"Bearer {key}"})
     return {"value": (d.get("user_data") or {}).get("balance"), "unit": "USD", "note": ""}
+
+
+async def _tinyfish(c, key):
+    d = await _get(c, "https://agent.tinyfish.ai/v1/wallet",
+                   headers={"X-API-Key": key})
+    raw = d.get("available_balance")
+    try:
+        balance = Decimal(str(raw)) if not isinstance(raw, bool) and raw is not None else None
+    except InvalidOperation:
+        balance = None
+    if balance is None or not balance.is_finite() or balance < 0:
+        raise ValueError("TinyFish wallet returned an invalid available_balance")
+    reload_state = d.get("auto_reload")
+    if isinstance(reload_state, dict) and isinstance(reload_state.get("state"), str):
+        note = f"vendor auto-reload {reload_state['state']}"
+    elif reload_state is True:
+        note = "vendor auto-reload enabled"
+    elif reload_state is False:
+        note = "vendor auto-reload not enabled"
+    else:
+        note = "vendor auto-reload state unavailable"
+    return {"value": float(balance), "unit": str(d.get("currency") or "USD").upper(),
+            "note": note}
+
+
+async def _fishaudio(c, key):
+    workspace_id = get_settings().platform_fishaudio_workspace_id.strip()
+    if not workspace_id:
+        return {
+            "value": None,
+            "unit": "USD",
+            "note": "TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID is not configured; "
+                    "the unscoped route reports a separate personal wallet and is not used",
+        }
+    d = await _get(
+        c,
+        "https://api.fish.audio/wallet/self/api-credit",
+        headers={"Authorization": f"Bearer {key}"},
+        params={"team_id": workspace_id},
+    )
+    raw = d.get("credit") if isinstance(d, dict) else None
+    try:
+        credit = Decimal(str(raw)) if not isinstance(raw, bool) and raw is not None else None
+    except (InvalidOperation, ValueError):
+        credit = None
+    value = float(credit) if credit is not None and credit.is_finite() and credit >= 0 else None
+    return {
+        "value": value,
+        "unit": "USD",
+        "note": "Workspace API-credit balance; funding and top-ups are operator-managed",
+    }
+
+
+async def _tavily(c, key):
+    d = await _get(c, "https://api.tavily.com/usage",
+                   headers={"Authorization": f"Bearer {key}"})
+
+    def remaining(meter, used_name, limit_name):
+        used, limit = meter.get(used_name), meter.get(limit_name)
+        if (isinstance(used, (int, float)) and not isinstance(used, bool)
+                and isinstance(limit, (int, float)) and not isinstance(limit, bool)
+                and math.isfinite(float(used)) and math.isfinite(float(limit))
+                and used >= 0 and limit >= 0):
+            return max(0, limit - used)
+        return None
+
+    meter = d.get("key") or {}
+    key_remaining = remaining(meter, "usage", "limit")
+    if key_remaining is not None:
+        return {"value": key_remaining, "unit": "API credits",
+                "note": f"key usage {meter['usage']:g} of {meter['limit']:g}; account pools are informational"}
+    # A key with no configured per-key cap returns `limit: null` even though its account plan has a
+    # finite pool. That is the normal shape of an unrestricted Tavily key, not an unknown balance.
+    account = d.get("account") or {}
+    plan = remaining(account, "plan_usage", "plan_limit")
+    paygo = remaining(account, "paygo_usage", "paygo_limit")
+    known = [value for value in (plan, paygo) if value is not None]
+    if known:
+        pools = ", ".join(name for name, value in (("plan", plan), ("PAYGO", paygo))
+                          if value is not None)
+        return {"value": sum(known), "unit": "API credits",
+                "note": f"key has no finite cap; remaining {pools} account pool(s)"}
+    return {"value": None, "unit": "API credits",
+            "note": "Usage response did not contain a finite key or account limit"}
+
+
+async def _olostep(c, key):
+    # Free authenticated account read. `credits` is the authoritative sum of unexpired lots;
+    # endpoint responses report their own `credits_consumed`, which settlement handles separately.
+    d = await _get(c, "https://api.olostep.com/user/credits/info",
+                   headers={"Authorization": f"Bearer {key}"})
+    subscription = d.get("active_subscription") or {}
+    plan = subscription.get("display_name") or subscription.get("id") or "unknown"
+    allowed = d.get("allow_usage")
+    state = "allowed" if allowed is True else "blocked" if allowed is False else "unknown"
+    return {"value": d.get("credits"), "unit": "credits",
+            "note": f"plan {plan}; usage {state}"}
 
 
 async def _scrapecreators(c, key):
@@ -641,6 +739,10 @@ BALANCE_ROUTES = {
     "tomba": _tomba,
     "dataforseo": _dataforseo,
     "tikhub": _tikhub,
+    "tinyfish": _tinyfish,
+    "fishaudio": _fishaudio,
+    "tavily": _tavily,
+    "olostep": _olostep,
     "scrapecreators": _scrapecreators,
     "serpapi": _serpapi,
     "moz": _moz,
@@ -674,6 +776,9 @@ BALANCE_ROUTES = {
 # obtain. Kept explicit so the report names them instead of silently skipping, and so a future probe
 # has a list of what to re-check.
 NO_BALANCE_API = {
+    "adyntel": "no public balance or usage endpoint in the official API reference "
+                "(checked docs.adyntel.com 2026-09-22) — PAYG credits are visible in the "
+                "provider dashboard only",
     "aviato": "no public balance endpoint documented (checked docs.data.aviato.co 2026-08-31) — "
               "internal playbooks reference aviato_get_balance but it is not in the public API; "
               "dashboard only",
@@ -689,8 +794,13 @@ NO_BALANCE_API = {
                          "prepaid Credits are visible in the vendor dashboard only",
     "justoneapi": "balance available only via MCP server (get_account_balance tool), no public REST "
                   "endpoint documented (checked docs.justoneapi.com 2026-08-31) — dashboard only",
+    "keenable": "no public REST balance or usage endpoint in the official OpenAPI document "
+                "(checked docs.keenable.ai 2026-09-23) — the console shows remaining credits and "
+                "authenticated MCP calls report only per-call usage",
     "limadata": "no free standalone balance or usage endpoint in the official Basic v2 API "
                 "(checked api.limadata.com/docs/basic_v2 2026-09-17) — dashboard only",
+    "trestleiq": "no public balance or usage endpoint in the official API reference "
+                  "(checked docs.trestleiq.com 2026-09-21) — Developer Portal only",
     "marketstack": "no usage endpoint (checked 2026-08-31) — monthly quota in the dashboard, "
                    "email alerts at 75/90/100%",
     "scrubby": "no free standalone balance or usage endpoint in the official API "

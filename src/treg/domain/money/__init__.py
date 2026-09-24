@@ -304,7 +304,7 @@ async def reserve_in_transaction(
                  endpoint_id=endpoint_id,
                  meta={**(meta or {}),
                        "estimated_micro": int(est_micro), "charged_micro": charged,
-                       "margin": get_settings().platform_margin})
+                       "margin": get_settings().platform_margin, "tags": dict(tags or {})})
     # One row per caller tag, at the estimate, in THIS transaction. A builder's budget and invoice are
     # read from these; writing them anywhere else (or later) would make both lossy.
     for dim, val in (tags or {}).items():

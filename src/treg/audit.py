@@ -21,7 +21,7 @@ import logging
 from collections import deque
 
 from .infra.db import background_session_maker
-from .models import CallRecord, RunRecord, SearchMiss
+from .models import CallRecord, RunRecord, SearchLog, SearchMiss
 
 _pending: set[asyncio.Task] = set()
 # ONE writer per process, and it writes in batches. Audit rows are single-row inserts that cost
@@ -93,14 +93,26 @@ def record_search_miss(*, query: str, source: str) -> None:
     _enqueue(SearchMiss, dict(query=query[:300], source=source))
 
 
+def record_search(*, query: str, source: str, org_id: int | None, user_email: str | None,
+                  **fields) -> None:
+    """One search under the discovery experiment (models.SearchLog): both rankers' pages and the one
+    served, with the caller's identity so a later call can be credited. `fields` are the
+    experiment's own columns (application.search_experiment.Outcome.log). Fire-and-forget, like
+    every write here — a dropped row costs one sample of the experiment, never a search."""
+    _enqueue(SearchLog, dict(query=query[:300], source=source, org_id=org_id,
+                             user_email=user_email, **fields))
+
+
 def record_run(
     *, org_id: int | None = None, user_email: str, bundle_name: str, argv: list, exit_code: int,
     duration_ms: int, client: str = "", api_key_id: int | None = None,
     api_key_name: str | None = None, api_key_prefix: str | None = None,
+    tags: dict | None = None,
 ) -> None:
     _enqueue(RunRecord, dict(
         org_id=org_id, user_email=user_email, bundle_name=bundle_name,
         argv=argv, exit_code=exit_code, duration_ms=duration_ms, client=client,
+        tags=dict(tags) if tags else None,
         api_key_id=api_key_id, api_key_name=api_key_name, api_key_prefix=api_key_prefix,
     ))
 

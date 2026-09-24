@@ -24,7 +24,7 @@ proposed_capabilities:
   web.search.deep: "Deep multi-query web search with reasoning"
   web.search.news: "Search recent news articles by topic"
   web.search.publications: "Search research papers and publications"
-  web.contents.get: "Get a page's text, highlights or summary by URL"
+  web.extract: "Extract page text, highlights or summaries by URL"
   web.similar: "Find pages similar to a URL"
   web.answer: "Get a cited answer to a question from the web"
 
@@ -256,7 +256,7 @@ endpoints:
 
   - id: exa.web.contents.get
     domain: contents
-    capability: web.contents.get
+    capability: web.extract
     platform: web
     scope: any_account
     method: POST

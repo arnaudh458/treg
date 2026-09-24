@@ -1,17 +1,100 @@
 ---
-title: The web dashboard (Ledger, served from FastAPI)
+title: The web dashboard (served from FastAPI)
 status: shipped
 sources:
   - src/treg/web/sitetrack.js
-  - src/treg/web/index.html
+  - frontend/index.html
+  - frontend/package.json
+  - frontend/vite.config.ts
+  - frontend/src/pages/TeamResourcesPage.vue
+  - frontend/src/dialogs/FishVoiceDialog.vue
+  - frontend/src/state/resources.js
+  - frontend/src/state/resourcesComputed.js
+  - frontend/src/App.vue
+  - frontend/src/api.ts
+  - frontend/src/components/DashboardNavigation.vue
+  - frontend/src/components/PublicNavigation.vue
+  - frontend/src/components/SignInDialog.vue
+  - frontend/src/components/SignedOutPage.vue
+  - frontend/src/dialogs/AcceptInvitesDialog.vue
+  - frontend/src/dialogs/AgentGuideDialog.vue
+  - frontend/src/dialogs/CallDetailsDialog.vue
+  - frontend/src/dialogs/ConnectTokenDialog.vue
+  - frontend/src/dialogs/ConnectionMethodDialog.vue
+  - frontend/src/dialogs/CopyToolDialog.vue
+  - frontend/src/dialogs/EditToolDialog.vue
+  - frontend/src/dialogs/ExtraCredentialDialog.vue
+  - frontend/src/dialogs/ImportSkillDialog.vue
+  - frontend/src/dialogs/RecipeDialog.vue
+  - frontend/src/dialogs/RequestToolDialog.vue
+  - frontend/src/dialogs/ResourcePickerDialog.vue
+  - frontend/src/dialogs/RunToolDialog.vue
+  - frontend/src/dialogs/ShareDialog.vue
+  - frontend/src/dialogs/TopUpDialog.vue
+  - frontend/src/dialogs/TryEndpointDialog.vue
+  - frontend/src/dialogs/WelcomeDialog.vue
+  - frontend/src/main.ts
+  - frontend/src/pages/ActivityPage.vue
+  - frontend/src/pages/AdminPage.vue
+  - frontend/src/pages/CatalogPage.vue
+  - frontend/src/pages/DetailPage.vue
+  - frontend/src/pages/GettingStartedPage.vue
+  - frontend/src/pages/HelpPage.vue
+  - frontend/src/pages/PlatformPage.vue
+  - frontend/src/pages/ProviderPage.vue
+  - frontend/src/pages/ReferralsPage.vue
+  - frontend/src/pages/SecretsPage.vue
+  - frontend/src/pages/TeamPage.vue
+  - frontend/src/pages/ToolsPage.vue
+  - frontend/src/state/activity.js
+  - frontend/src/state/admin.js
+  - frontend/src/state/agents.js
+  - frontend/src/state/agentsComputed.js
+  - frontend/src/state/analytics.js
+  - frontend/src/state/billing.js
+  - frontend/src/state/billingComputed.js
+  - frontend/src/state/boot.js
+  - frontend/src/state/catalog.js
+  - frontend/src/state/catalogComputed.js
+  - frontend/src/state/connections.js
+  - frontend/src/state/constants.js
+  - frontend/src/state/context.ts
+  - frontend/src/state/controller.js
+  - frontend/src/state/data.js
+  - frontend/src/state/details.js
+  - frontend/src/state/detailsComputed.js
+  - frontend/src/state/format.js
+  - frontend/src/state/governance.js
+  - frontend/src/state/help.js
+  - frontend/src/state/keys.js
+  - frontend/src/state/lifecycle.js
+  - frontend/src/state/navigation.js
+  - frontend/src/state/onboarding.js
+  - frontend/src/state/onboardingComputed.js
+  - frontend/src/state/projects.js
+  - frontend/src/state/referrals.js
+  - frontend/src/state/secrets.js
+  - frontend/src/state/session.js
+  - frontend/src/state/sessionComputed.js
+  - frontend/src/state/sharing.js
+  - frontend/src/state/skills.js
+  - frontend/src/state/snippets.js
+  - frontend/src/state/team.js
+  - frontend/src/state/tools.js
+  - frontend/src/state/tryTool.js
+  - frontend/src/styles/base.css
   - src/treg/web/agent-setup.js
+  - src/treg/web/media/redesign/dashboard.css
+  - src/treg/web/media/redesign/SOURCES.md
   - src/treg/web/vendor/README.md
-  - src/treg/web/vendor/vue-3.5.41.global.prod.js
+  - frontend/scripts/copy-runtime.mjs
   - src/treg/web/tutorial.js
   - src/treg/web/tutorial.html
   - src/treg/web/tour/tour.js
   - src/treg/web/tour/index.html
   - src/treg/api.py
+  - tests/test_dashboard_rollout.py
+  - src/treg/web/dashboard-legacy/README.md
   - src/treg/routers/web.py
   - src/treg/domain/identity/session.py
   - src/treg/routers/api_keys.py
@@ -106,34 +189,61 @@ generated tool name in the second, then health/capabilities and actions. Method-
 discovery is unchanged. A direct identity miss shows `setup required`; it does not show the
 connection as working and no direct tool exists.
 
-A single-file Vue 3 dashboard in `src/treg/web/index.html`, served **same-origin** by the API
-(`GET /app` → `FileResponse`, `dashboard()` in `routers.web`, via `_WEB_DIR`). Same origin = no CORS and it
-ships with the server (Render/Fly). Design language: **Ledger** (warm charcoal + clay accent,
-mono-forward, dark default + light toggle) — see `docs/style-board.html` / `docs/DASHBOARD-PLAN.md`.
+The Vue 3 Dashboard is authored in `frontend/` and compiled with Vite. `frontend/index.html`
+contains only the document entry; templates live in `.vue` pages, dialogs and shared navigation.
+`state/` separates the existing Options API use cases by feature. `context.ts` keeps their
+per-application state available to extracted components during this incremental migration; it is
+not a singleton, and this boundary is not yet a fully typed domain store. The TypeScript entry,
+JSON transport and development configuration are checked with `vue-tsc` before every build.
+Initialization renders a neutral loading state until session and route resolution finish, with a
+retry on unexpected failure. Signed-out arrivals get a focused sign-in entry or shared-link gate;
+the obsolete embedded marketing page is removed. The public landing page remains at `/`.
+History navigation retains existing hashes, catalog URLs and shared links in `state/navigation.js`,
+`state/catalog.js`, `state/details.js` and `state/boot.js`.
+Mainline Team resources and Fish Audio upload, voice-management and audio-preview flows live
+in `TeamResourcesPage.vue`, `FishVoiceDialog.vue`, `TryEndpointDialog.vue` and their state modules.
 
-### Vue is vendored, not fetched from a CDN
-There is no bundler, so Vue arrives as a plain `<script src>` — but from **`/vendor/`**, served off
-`src/treg/web/vendor/` by an `_ImmutableStatic` mount in `bootstrap.py`, never from unpkg. It used to come
-from `unpkg.com/vue@3`, and a visitor whose network could not reach unpkg got a **blank signed-in
-dashboard with no error** ([#137](https://github.com/superdesigndev/treg/issues/137): mainland-China
-`ERR_CONNECTION_CLOSED`, then `Vue is not defined`). The landing has no external scripts at all, so
-the symptom read as "sign-in broke the site" when it was only "the dashboard needs one more origin".
+`_new_dashboard` selects the compiled entry by verified session user ID: the master rollout switch
+must be on, then an ID allowlist or a stable SHA-256 bucket below the configured percentage selects
+new. Defaults are off and zero percent. Anonymous and token-only browser entries retain the frozen
+`dashboard-legacy/index.html`, whose Vue/onboarding/tutorial JavaScript has revision-qualified legacy asset
+URLs. No query parameter, team selection or analytics service controls assignment. All dashboard,
+shared-link and catalog entries use this decision and `private, no-store` plus `Vary: Cookie`.
+Environment changes require restarting Web processes. Existing tabs switch on reload; the version
+stamp also incorporates rollout settings to offer a refresh when assignment policy changes.
+Every signed-in selection emits `dashboard_served` (variant, assignment, bucket, percentage) and
+sets the `dashboard_variant` and `dashboard_bucket` person properties. Analytics only observes the
+decision: PostHog persons carry no user ID to recompute the bucket from, and the bucket alone cannot
+date an account's switch when the percentage moves.
 
-Two rules follow, and both are load-bearing:
+The legacy snapshot is deprecated and scheduled for removal after rollout, not a second maintained
+Dashboard. New features and routine fixes belong only in `frontend/`; normal main-branch syncs must
+not refresh the frozen artifact. `frontend/README.md` owns the retirement checklist: migrate
+anonymous and token-only entries as well as signed-in accounts, then remove the snapshot, legacy
+asset route, selection settings and obsolete rollout plumbing. A 100% account rollout alone does
+not retire legacy.
 
-- **Pin the version in the filename** (`vue-3.5.41.global.prod.js`) and verify new bytes against a
-  second CDN before committing them — see `src/treg/web/vendor/README.md`. A floating `vue@3` tag is
-  arbitrary future code running in an authenticated session; that is why it is gone.
-- **Nothing in the dashboard's critical path may be third-party.** Still CDN-hosted and *not*
-  critical: the `@lobehub` agent icons (`agentIcon`/`agentIconInv`) and Google Fonts — those degrade
-  to broken images and system fonts rather than a blank page.
+`GET /app` serves the selected document same-origin from the Python package, preserving local
+sign-in and parked OAuth authorization. Catalog and shared-link handlers modify that same document's
+metadata as before. `_app_version()` hashes the built entry, whose asset filenames change with
+bundle content. HTML is not cached; `/app/ui/assets/{name}` serves immutable hashed assets and
+returns 404 for missing files. Assets remain a control-role surface.
 
-A **loader guard** sits right after the script tag. `[v-cloak]{display:none}` hides the un-compiled
-template until Vue mounts, which is precisely what made #137 silent — so the guard checks whether
-`#app` is still cloaked ~1.5s after `load` and, if it is, replaces the blank with a readable message,
-a reload button, and the issues link. Anything that stops Vue mounting now says so on screen.
+`bash scripts/build-dashboard.sh` installs the npm lockfile and builds into the gitignored
+`src/treg/web/dashboard/` directory. Hatch includes it in distributions and rejects missing builds;
+Node is not needed when installing a published wheel. `scripts/dev-local.sh up` starts both Python
+and Vite, using a local-only development entry for hot updates. See `CONTRIBUTING.md`.
 
-`index.html`'s closing `<script src="/sitetrack.js">` (also on `landing.html`, every `usecase-*.html`,
+### Browser dependencies
+
+Vue is pinned in the npm lockfile and bundled from the same origin, so a blocked CDN cannot
+prevent startup. The shared onboarding widgets in `/agent-setup.js` still serve both Dashboard and
+Arena; their templates use Vue's bundled compiler. The global Vue runtime for standalone pages and the legacy snapshot is
+copied from the npm package at build time, with its license; generated copies are not committed. Agent icons and Google Fonts remain optional external presentation assets.
+The unmounted entry displays a loading message and a reload link rather than hiding a raw template.
+The authenticated redesign follows the root `design.md`.
+
+`frontend/index.html`'s `<script src="/sitetrack.js">` (also on `landing.html`, every `usecase-*.html`,
 `resources.html`, `tutorial.html`) sets the first-touch `treg_utm` cookie and initialises PostHog with
 pageviews on; `initAnalytics()` in the SPA defers to it (`window.__phInit`) and only identifies, keeping
 its inline init as the fallback for a stale bundle. Landing-page visitors used to be invisible to
@@ -146,12 +256,11 @@ that redirect can drop the query string. No Google tag, first-party cookie only;
 [ads-conversions](../architecture/ads-conversions.md).
 
 ## Shell & design system (2026 rework)
-The design tokens are now **shared across every served page** (`index.html`, `tutorial.html`,
-`tour/index.html`): **system mono** (`ui-monospace, "SF Mono", …` — `IBM Plex Mono` was never actually
-loaded, so this makes rendering consistent for everyone), `--r:14 / --rb:9`, a `14px` base, and one
-shared `.btn` / `.iconbtn` height so controls align. The logged-out SPA keeps the hero, key-leak
-explanation, footer CTA, and sign-in modal, but its anonymous sandbox studio has been removed. The
-backend sandbox routes remain temporarily for a later cleanup (see [landing-sandbox](landing-sandbox.md)).
+The authenticated dashboard uses the redesigned shell documented below. The tutorial, tour,
+public catalog and logged-out surfaces retain their existing tokens and layout. The logged-out
+SPA keeps the hero, key-leak explanation, footer CTA and sign-in modal; its anonymous sandbox studio
+has been removed. Backend sandbox routes remain temporarily for a later cleanup (see
+[landing-sandbox](landing-sandbox.md)).
 
 An OAuth authorization that needs sign-in redirects to `/?signin=oauth`. The dashboard reads this as
 a UI cue, removes it from the visible URL, and opens the same modal with generic connection copy. It
@@ -165,18 +274,30 @@ long enough for attribution, strips it with the other one-shot parameters via `h
 and opens the sign-in modal. It never calls `sbxInit` or `POST /demo/sandbox`. A plain logged-out
 `/app` visit still redirects to `/`.
 
-The **authed** shell is sidebar-first. The **top bar** is just brand + search. The **left sidebar**
-stacks: (top) an **org block** — role + team name — that on click opens a switcher **dropdown** where
-each team carries its own **⚙ Settings** (`orgSettings` → switch into it, then open its settings) and
-**Switch** (`switchTo`) button (long names truncate, actions pinned right; the click-outside handler
-keys on `.orgblock`); (middle) the nav — Tools · **Secrets** (member+) · **Marketplace** (member+, the
-OAuth-connect view — `go('connections')`) · Activity · **Usage** (admin/owner) · Team · Getting
-started · Admin, then a Help group of two external links (**Open source** (the GitHub repo) ·
-**Discord community**) —
-the Tutorial nav entry was removed 2026-08-12 in their favor; the `help` view itself survives and
-is still reachable (welcome flow, in-app links); (bottom)
-the **account** block — avatar · email · theme · sign out. The old top-bar org dropdown and top-right
-account controls are gone.
+The authenticated shell uses the top navigation from the designer's Figma `12:596` reference.
+The left side holds the treg mark (a link to the public homepage) and the existing team switcher; the middle exposes Getting started,
+Catalog (member+), **Your own tools**, Activity and Team; the right side holds community links,
+the admin-gated balance and an account disclosure with appearance, billing, Admin (when authorized),
+help and sign-out. **Refer a friend** is a persistent bottom-right link, available to every signed-in
+user. On narrow screens navigation scrolls in a second row; team switching and own-tools access
+remain available. The public catalog and logged-out landing retain their separate shells.
+
+The authenticated wrapper's `.redesign` class scopes `media/redesign/dashboard.css`, served through
+the existing `/media` mount. It uses Google Sans Flex for interface text, Geist Pixel for page titles,
+and DM Mono for commands and balances, with light and dark semantic colors. Getting started uses
+an approximately 1080px centered column, a split agent-preview/setup card, image-backed prompt cards,
+and the existing optional Build on treg and manual setup flows. On mobile the setup card and prompt
+grid stack. Images are copied from the pinned designer repository; provenance is in
+`media/redesign/SOURCES.md`. This first implementation uses static posters instead of autoplay video.
+Existing agent selection, token masking/copying, OAuth entry points and all backend data remain wired.
+Copy failures, including unavailable clipboard APIs, surface a dismissible message, and the agent picker/account disclosure close on Escape
+or outside interaction. The search entry on Getting started navigates to Catalog and focuses the
+existing search field. Team settings and switching retain the existing `orgSettings` / `switchTo`
+behavior, including fixed-position dropdown placement via `placeOrgMenu`. The team picker supports
+Enter and Space; Escape restores focus to its trigger. Direct `go` navigation returns to the top of
+the destination; Back/Forward leaves scroll restoration to the browser. Category/team tabs and wide
+tables scroll locally on small screens, and the onboarding OAuth divider wraps instead of widening
+the page.
 
 ## Standalone Enrich Arena
 
@@ -654,8 +775,10 @@ platform without opening it, and every field comes off the `/catalog/platforms` 
 
 **Prices are unified USD.** Every price the marketplace displays — the card footer, the capability card's
 "from", and the per-endpoint cost chip — comes from the server's price object on `cost` / `price_from`:
-normally its computed **`usd`**, or its equivalent grouped **`display_usd` / `display_unit`** pair,
-formatted by `usdNum`: two significant figures under a dollar (`$0.015`, `$0.00015`), cents at or above one.
+normally its computed **`usd`**, or its equivalent **`display_usd` / `display_unit`** pair,
+with `display_prefix: "up to "` when that figure is a validated maximum hold rather than a typical
+settled charge. `usdNum` formats two significant figures under a dollar (`$0.015`, `$0.00015`),
+and cents at or above one.
 The FX table lives in the catalog (`fx.yaml`) so a rate refresh re-prices every surface at once, and the
 dashboard carries **no** conversion constant of its own — one here would drift from the CLI the moment the
 table changed. Wherever the provider bills in something else, the native figure follows as a muted
@@ -777,7 +900,7 @@ Lusha, Diffbot…) bill in their own credits, so their price *is* documented, ju
 is the whole People/Company half of the catalog.
 
 Each `.lep` block is provider logo + name, `METHOD path` (mono), a compact cost chip (`costLabel`:
-`$0.015/success (¥0.10)`, `1 row`, `free`, and `per success · price in provider dashboard` when the
+`$0.015/success (¥0.10)`, `up to $0.064/call`, `1 row`, `free`, and `per success · price in provider dashboard` when the
 billing unit is known but the rate is not published), a `verified <date>` / `unverified` chip, a **scope**
 chip, and a tier chip. Scope is the load-bearing distinction in a mixed list: `own_account` rows (the
 OAuth providers) read **`your account`** in teal with the hint "reads the account YOU connect via OAuth,
@@ -869,32 +992,10 @@ line rather than an empty table. `.prm-t` explicitly resets the global `table`/`
 background, border, radius, filled header bar), which otherwise reads as a stray highlight inside the
 `.prm` box and clips the first column against the table's own border. Navigation runs both ways: an integration page carries a
 **Covered in the catalog** chip row (`mkPlatforms`) into the platform pages, and each platform page
-header links back out to the providers that serve it (`platProviders`). `tests/test_dashboard_markup.py`
-pins this provider navigation to the platform response itself; it does not disappear while the
-separate OAuth connection registry is still loading. The same test
-locks the structure (top-level view, the row/detail `<template>` pair inside the `.ttable`, the
-`v-if`'d tab bar and its `platform` fallback, the derived tab list and category order, tiles wearing the
-platform's own logo with the generated-initial fallback, the `Platform` tab still carrying the provider
-shelves and their connect flow, the category heading being a real heading, the card's four regions
-(mark + name + category, the connected-state corner, the count/price footer — and NO summary
-paragraph, with the name wrapping instead of ellipsising), the
-unified-USD price rule (server `usd`, no local FX constant, native suffix, `{}`-normalisation,
-`quota_rows` excluded first) and its unmetered-OAuth-only "free with your account" branch,
-the runnable green on all three of its surfaces, the stacked platform header, the always-both
-provider/endpoint counts, the credit-priced fallback ranking ahead of "price not published",
-the parameters block sitting before the example
-toggle with its query/path/body order and its no-params fallback,
-the featured-shelf split and its two guards, the ledger being one table
-with `other`-last domain sections that need a visible row to exist, the single platform-wide Actions
-section holding every management endpoint, and merged-before-single rows, a row title that is a name or a clipped
-summary and never a paragraph, the collapsed merged row's non-wrapping three-pills-and-a-count strip, its pills being per-provider,
-sorted cheapest-first and priced only when the price is a real number,
-the two-level expansion (provider sub-rows, then one detail block shared with the single-row path), the
-long metered phrasing never reaching a collapsed line, the filter bar's three controls and their chip
-counts, both sticky layers and the overflow rules that let them stick, the two-tab expansion (Request first, no response tab at
-all without an example, both panes capped at 320px), the prominent Connect in the tab bar with its
-Connected state, the `treg call` line and the provider facts, the cross-currency cheapest rules, the credit-priced "see provider" fallback, the scope
-chips, and lazy examples). `tests/test_catalog_api.py` locks the server half: the section order, the
+header links back out to the providers that serve it (`platProviders`). Provider navigation derives
+from the platform response itself, so it remains available while the separate OAuth connection
+registry loads. Browser tests in `frontend/e2e/` cover navigation and interactions; they do not pin
+CSS classes or template source spelling. `tests/test_catalog_api.py` locks the server half: the section order, the
 merged/single split, the domain resolution ladder, and a delivery-mode path segment never becoming a
 subject.
 
@@ -908,7 +1009,7 @@ near-white background, bright cyan URLs, and a dark copy pill. That is also why 
 "terminal surfaces stay dark in both themes" rule is gone: in light mode a code block is now a light
 block with dark ink, which is what makes the ramp legible.
 
-Two token sets carry it (index.html §3.8, mirrored in tutorial.html, which has its own copy of the
+Two token sets carry it (`frontend/src/styles/base.css`, mirrored in tutorial.html, which has its own copy of the
 sheet): `--code-bg` / `--code-ink` / `--code-line` / `--code-btn` for the surface, and
 `--sx-cmd` / `--sx-var` / `--sx-str` / `--sx-flag` / `--sx-cmt` / `--sx-punct` for the ramp. Every
 light value clears **4.5:1** on `--code-bg` (measured worst case across all pages: 4.67 light, 5.62
@@ -962,7 +1063,7 @@ the prose walkthrough is `docs/TUTORIAL.md`. Editing steps means editing `tutori
 
 **Two focused tutorials as cards** — **Import & shell** (`importShell`, auto-import + shell mode + the
 local-run sandbox) and **Team access control** (`access`, per-member tool access + the local-run dial)
-are cards on the tutorial chooser (`view==='help'`), rendered by **one shared stepper template** in `index.html`
+are cards on the tutorial chooser (`view==='help'`), rendered by **one shared stepper template** in the Dashboard components
 (`helpMode === 'import-shell' || 'access'`), with its own `xtut*`-prefixed state/computed/method names
 (`xtut.i`, `xtutSteps`, `xtutStep`, `xtutTitle`, `xtutGo`) so they never collide with the CLI tutorial's
 `tut*` names. Two extra persona chips: `you` (green) and `sam` (amber). Each also has a **prose twin**
@@ -1016,6 +1117,24 @@ dashboard views rather than leaving the app; its allow-list now includes the **`
 **`start`** (Getting started) views too, so those are reachable by Back/Forward like the rest.
 
 ## Write UI — Phase 2b shipped (resource registration)
+The catalog Try drawer renders declared provider headers and multipart/file fields. Audio responses
+remain blobs with playback/download controls; replacing or closing a preview revokes its browser
+object URL. The Fish voices panel calls the
+unified organization provider-resource route: BYOK reads the connected Fish account's list, while platform access reads only
+the current organization's resources. Both normalize into the same rows and offer use-in-TTS,
+rename, and confirmed delete. Save and rename use app-owned dialogs rather than browser prompts,
+mutations surface success or failure, and use-in-TTS unwraps the catalog endpoint-detail envelope.
+The panel never calls Fish's account-wide list on the platform key; the unusable Inspect action is absent.
+The Fish list action's Manual, CLI, API and agent recipes point at the unified resource surface, so
+platform teams do not see a misleading BYOK-required warning. Plain `/call/` remains the raw relay.
+
+**Team resources** is the third Your vault sub-tab (`view==='resources'`). It calls the organization
+resource endpoint with `source=platform`, so the table means exactly “durable objects owned by this
+team” even when the team has a Fish BYOK credential. Provider and kind filters narrow the table, the
+global dashboard search matches names and ids, and the client paginates ten rows at a time. Fish voice
+rows reuse the existing use-in-TTS, rename and confirmed-delete actions; every resource can copy its
+upstream id. The view participates in both hash-route whitelists and reloads on an organization switch.
+
 The **Tools** view registers resources (members+ via `canRegister`; viewers can't). The **Secrets** view
 (own sidebar tab) — `loadSecrets` (values never shown) + `addSecrets` (posts each filled `secretRows` row,
 per-name errors, `encode:true` body for the edge WAF) + `deleteSecret` (surfaces the 409
@@ -1035,13 +1154,16 @@ OAuth-connect in-browser (the hosted consent + poll flow, `/oauth/*`) **has now 
 Marketplace section above. Everything in DASHBOARD-PLAN (org lifecycle, resource registration incl.
 multi-binding + edit, skill bundles, super-admin mutations, OAuth connect, shareable detail pages) has
 shipped. Packaging: `src/treg/web` lives inside the `treg` package, so the wheel's `packages`
-inclusion ships every asset (incl. `tutorial.js`/`tutorial.html`) — no `force-include` (a redundant
-one double-adds each file and breaks the wheel build).
+inclusion ships its runtime assets (incl. `tutorial.js`/`tutorial.html`) without a `force-include`
+(a redundant one double-adds each file and breaks the wheel build). Hosted-page MP4 demos are the
+deliberate exception: Hatch exclusions keep them out of PyPI artifacts while Git deployments retain
+them.
 
 ## The Referrals view
 
-A top-level `<template v-if="view==='referrals'">`, plus a nav button and a second entry point under
-the balance chip (where someone is already thinking about what treg costs them).
+`ReferralsPage.vue` renders the referrals view. The maintained Dashboard exposes a fixed
+`Refer a friend` link at the bottom left, leaving the bottom right for the support messenger.
+`dashboard.css` keeps this placement on desktop and mobile.
 
 **`'referrals'` must appear in BOTH view whitelists** — `viewFromHash()` and the `popstate` handler.
 `go('referrals')` works on click regardless of them; those two lists are what make the view survive

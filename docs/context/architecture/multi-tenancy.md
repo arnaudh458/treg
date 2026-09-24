@@ -2,12 +2,19 @@
 title: Multi-tenancy — orgs, memberships, invites, per-org scoping
 status: shipped
 sources:
+  - src/treg/domain/governance/access.py
+  - src/treg/alembic/versions/0042_pinned_read_scope.py
+  - tests/test_pinned_read_scope.py
   - src/treg/models.py
   - src/treg/api.py
   - src/treg/caller_metadata.py
   - src/treg/application/auth.py
   - src/treg/application/asynctasks.py
   - src/treg/application/call/resolve.py
+  - src/treg/application/provider_resources.py
+  - src/treg/domain/provider_resources.py
+  - src/treg/routers/provider_resources.py
+  - src/treg/alembic/versions/0043_provider_resources.py
   - src/treg/application/signup.py
   - src/treg/domain/governance/access.py
   - src/treg/domain/governance/budgets.py
@@ -332,35 +339,63 @@ floor. `db.verify_db()` checks revision compatibility without creating or repair
 > Health (`run_all`) takes an `org_id` filter so `/health/run` never leaks other orgs' credentials, and
 > alerts resolve the owner's per-org membership webhook. See [auth-secrets](auth-secrets.md).
 
-## Caller tags are a label, not a tenancy boundary
+## Caller tags and pinned read scopes
 
-A builder reselling treg tags each call with their own ids (`X-Treg-Meta: customer=cust_8123,
-workspace=ws_9`) so they can attribute, budget and invoice their users. Those tags drive real money
-decisions — see [money](money.md) — but they change nothing about isolation.
+Caller-supplied `X-Treg-Meta` tags remain attribution labels: an unpinned org token may choose any
+valid value. A restricted agent's `Membership.pinned_tags` is enforced by the server; a conflicting
+header is a 403. An unpinned operator retains the org-wide view and the shared balance.
 
-**The org remains the only hard boundary.** A tag is caller-asserted: anyone holding the token can
-send any value, exactly like `X-Treg-Client`. That is acceptable because every budget and every report
-a tag touches belongs to the team that sent it, so the only party who can mis-tag is the one who owns
-the consequences. It is *not* acceptable as a wall between mutually distrusting parties, and nothing
-in the codebase treats it as one.
+`domain.governance.access.pinned_tag_predicates` requires every pinned key/value in the stored tags.
+`/calls`, `/calls/{id}/result`, `/calls/{call_ref}` and `/runs` apply that scope before pagination or
+loading archive bodies. A known foreign or unattributed id is a 404, just like an unknown id.
+`POST /reviews` resolves its call through the same predicates, so a pinned caller can neither rate nor
+probe another pin's call. Every audit writer stores the pin, the routed parent row and the router's
+refusal fallback included. A feedback report snapshots the reporter's pin (`Feedback.tags`, also in
+revision `0042`): `GET /feedback/{id}` reads through it and a pinned reporter's `call_ids` verify only
+against its own pin's rows.
+Matching is by pin, not by current membership: two identities with the same pin share that view.
+Changing a membership's pin does not relabel its earlier records.
 
-The rule to give builders: **tag for counting, token for control.** Start everyone on tags; mint a
-scoped agent token for the few who need real separation — different tool access, or a credential that
-runs on the end user's own machine. A pinned token (`Membership.pinned_tags`) is the one case where a
-tag stops being caller-asserted: the pin beats the header and a mismatch is a 403, because a token
-handed to one user must not be able to bill another.
+`AsyncTaskRecord.tags` and `AsyncResourceRecord.tags` snapshot the effective submission tags in their
+own transaction, independent of the lossy audit queue. Resources discovered by a terminal poll or
+worker inherit the original task's tags. Shared-provider poll/fetch ownership checks use those
+snapshots as well as org, provider and resource identity; a pinned refusal is 404. The unpinned
+403 contract is unchanged. BYOK and own-tool upstream access still follows the existing credential
+and tool ACLs: these read scopes do not partition a team's own provider account.
 
-Two consequences worth stating plainly:
+The reserve ledger entry freezes authoritative tags in `meta.tags`; `/calls/{call_ref}` can therefore
+serve an authorized ledger-only history even when audit was shed and the hold was released. Missing
+historical attribution is never inferred from current membership or mutable spend counters.
+Revision `0042` adds nullable tags to run/task/resource records without backfilling guesses. Old
+untagged rows remain readable by unpinned org members, but not by pinned identities. An older binary
+can run with the additive schema, but does not enforce the new read boundary.
 
-- **`TagBudget` never grows a balance column.** One org, one balance. Budgets are ceilings on a shared
-  pot, not sub-accounts; per-user balances would be a second money authority and are out of scope.
-- **`TagSpend` and `TagBudget` are org-scoped** and registered in
-  `domain/governance/teams.py`'s `ORG_SCOPED_MODELS`, `TagSpend`
-  ahead of `LedgerEntry`/`Hold` because it references them. `tests/test_orgs.py` walks the models and
-  fails if a new `org_id` table is missed.
+Both run audit writers store membership pins. Both history sources in `/runs` filter before their
+limits. Runs do not gain caller-supplied metadata parsing in this change.
+
+Treg's replay key includes the full pin as well as the existing primary-tag scope, so changing a
+secondary pin cannot expose an old replay. On the shared provider credential, the forwarded
+idempotency label is additionally partitioned by the full pin; unpinned forwarding is byte-for-byte
+unchanged. The plain BYOK label remains verbatim. Public media URLs are still bearer-by-possession
+links for vendor fetching; filtering history prevents discovery through those authenticated reads,
+not access by someone already holding a URL.
+
+`TagBudget` remains a ceiling on the org's shared balance, never a sub-account. `TagSpend` and
+`TagBudget` remain org-scoped in `domain.governance.teams.ORG_SCOPED_MODELS`, with `TagSpend` ahead of
+the ledger/hold it references. Pinned read scopes do not change budget concurrency or settlement.
+
 - **Shared-provider async objects are org-scoped.** Platform-key poll and result-fetch utility calls
   must resolve their id through an org-owned `AsyncTaskRecord` or `AsyncResourceRecord` before the
   upstream is contacted. BYOK calls keep access to ids in the team's own provider account.
+- **Shared-provider durable objects are org-scoped.** A platform-key managed-resource call verifies
+  every scalar or array id against `ProviderResource` before contacting the provider. A `use` tool
+  may additionally declare a read-only public lookup: an id absent from the ownership table is
+  accepted only after the provider confirms the catalog predicate with no DB connection held. Any
+  id assigned to another organization or tombstoned is denied locally and never sent through that
+  lookup. All members may create, list, use, rename and delete their team's objects; the organization
+  boundary, not the creator, owns them. BYOK bypasses this table.
+  The dashboard's Team resources inventory explicitly requests `source=platform`; a connected BYOK
+  account therefore never replaces or widens the organization's durable-resource inventory.
 
 ## Signup analytics boundary
 

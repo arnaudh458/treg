@@ -11,6 +11,7 @@ sources:
   - src/treg/caller_metadata.py
   - src/treg/client_identity.py
   - src/treg/application/auth.py
+  - src/treg/application/provider_resources.py
   - src/treg/application/call/access.py
   - src/treg/application/call/authorize.py
   - src/treg/application/call/idempotency.py
@@ -36,6 +37,7 @@ sources:
   - src/treg/routers/connections.py
   - src/treg/routers/onboard.py
   - src/treg/routers/orgs.py
+  - src/treg/routers/provider_resources.py
   - src/treg/routers/api_keys.py
   - src/treg/routers/resources.py
   - src/treg/routers/referrals.py
@@ -94,6 +96,19 @@ answers `{url, token, content_type, size, expires_at}`; `GET /m/{token}` serves 
 token, because the vendor's fetcher has none. 30 MB per file, 300 MB per org per 24 h, 7-day TTL,
 `image/*` / `audio/*` / `video/*` only, refused in the sandbox. Refusals: 415 type, 413 size, 429
 quota, 403 sandbox. Not metered. See [media](../architecture/media.md).
+
+## Provider resources
+
+`GET /orgs/{id}/provider-resources` is the unified HTTP/curl read for durable provider resources.
+Its default `source=auto` uses a connected Fish account for the Fish voice inventory and otherwise
+returns the team's platform-created rows. `source=platform` always returns the durable rows owned by
+the organization; the dashboard's Team resources tab uses that explicit view so BYOK account objects
+are never presented as treg-owned team resources.
+Ordinary providers read the organization's local rows. For `provider=fishaudio&kind=voice`, a team
+Fish credential makes the same route relay Fish's `self=true` account list and normalize it to the
+local resource shape; without BYOK it returns only voices owned by that treg organization. The
+`X-Treg-Resource-Source` response header is `byok` or `platform`. The raw
+`/call/fishaudio.voices.list` route remains a faithful BYOK-only upstream relay.
 
 ## Composition
 
@@ -435,8 +450,10 @@ validated before resolving the shared HTTP client. `/auth/logout` remains an HTT
     before returning CLI users to the team picker.
   - Email: `POST /auth/email/start` and `/verify`. Six-digit codes, attempt counts and per-email/
     per-IP start limits live in DB-backed `Ephemeral` state. `expose_dev_code` permits response/
-    log disclosure only on guarded local SQLite; other deployments email the code. Verification
-    issues an identity token and session cookie.
+    log disclosure only on guarded local SQLite; other deployments email the code. An email listed
+    in `TREG_FIXED_LOGIN_CODES` (an account with no inbox, such as a directory reviewer's demo
+    account) is issued its configured code hash instead and nothing is sent; attempts, TTL and
+    start limits are unchanged. Verification issues an identity token and session cookie.
   - Invite sign-in: the admin-visible invite code is join-only. An independent inbox-only
     `email_token` authenticates through `/auth/invite-signin`, consumed once. Invalid/expired
     links return `/?invite_expired=1`. See [auth-secrets](../architecture/auth-secrets.md).
@@ -475,8 +492,8 @@ validated before resolving the shared HTTP client. `/auth/logout` remains an HTT
   `tutorial_js` (`GET /tutorial.js` - shared `window.TREG_TUTORIAL` + `hl()`), `tutorial_page`
   (`GET /tutorial` - standalone CLI tutorial). The **dashboard tour** is a `StaticFiles(html=True)` mount
   at `/dashboard-tour/` (serves `web/tour/` - `tour.js`, the standalone `index.html`, and the WebP
-  `img/`). **Vendored front-end libraries** are an `_ImmutableStatic` mount at `/vendor/` (serves
-  `web/vendor/` - today just Vue, version-pinned in the filename, hence `Cache-Control: immutable`):
+  `img/`). **Package-generated front-end runtimes** are an `_ImmutableStatic` mount at `/vendor/` (serves
+  `web/vendor/` - Vue copied from the npm lockfile at build time, version-pinned in the filename, hence `Cache-Control: immutable`):
   the dashboard must not depend on a CDN a visitor's network may not reach, see
   [dashboard](dashboard.md). `favicon` (`GET /favicon.svg` + `/favicon.ico`). `llms_txt` (`GET /llms.txt`) serves
   `web/llms.txt` as `text/plain` with `{BASE}` templated from `public_url` - the [llms.txt](https://llmstxt.org)
@@ -875,7 +892,11 @@ Caps are **advisory**: concurrent calls can overshoot slightly. Your balance is 
 Untagged traffic shows up as `unattributed_micro` rather than being dropped.
 
 **Isolation.** `treg org agent-new <name> --pin customer=cust_A` mints a token pinned to one tag value;
-the pin beats the header and a mismatch is a 403. Rule of thumb: **tag for counting, token for control.**
+the pin beats the header and a mismatch is a 403. Call history, archived results, call references,
+runs and shared-provider async ownership require every pinned tag. Foreign and unattributed ids
+return 404 to pinned callers. Unpinned org readers retain their existing access; BYOK provider
+account permissions and public media URLs are unchanged. See [multi-tenancy](../architecture/multi-tenancy.md)
+for legacy rows and ledger-only reads. Rule of thumb: **tag for counting, token for control.**
 
 ## Referrals
 

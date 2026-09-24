@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -33,6 +34,14 @@ def platform_setting_name(provider: str) -> str:
 
 
 @lru_cache
+def _fixed_login_codes(raw: str) -> dict[str, str]:
+    """Parse `TREG_FIXED_LOGIN_CODES` (`email=sha256hex,...`) into {normalised email: code hash}.
+    Malformed entries are refused by the field validator, so parsing here can trust the shape."""
+    pairs = (part.split("=", 1) for part in raw.split(",") if part.strip())
+    return {email.strip().lower(): digest.strip().lower() for email, digest in pairs}
+
+
+@lru_cache
 def _blocked_email_domains(raw: str) -> frozenset[str]:
     """Parse `TREG_BLOCKED_EMAIL_DOMAINS` once per distinct value, not per request: split on commas,
     trim, drop a leading `@` or `.` (operators paste both spellings), lowercase, drop empties. A
@@ -57,8 +66,11 @@ class Settings(BaseSettings):
 
     # SQLite locally, Postgres on Render — same code path, just swap the URL.
     database_url: str = "sqlite+aiosqlite:///./treg.db"
+    # Optional SQLite / PostgreSQL datasource for explicitly opted-in, lag-tolerant reads.
+    # Empty keeps read_session_maker on the existing primary pool.
+    read_database_url: str = ""
 
-    @field_validator("database_url")
+    @field_validator("database_url", "read_database_url")
     @classmethod
     def _async_pg_driver(cls, v: str) -> str:
         # Some hosts inject a bare `postgres://`/`postgresql://` URL, but
@@ -68,6 +80,13 @@ class Settings(BaseSettings):
             v = "postgresql://" + v[len("postgres://") :]
         if v.startswith("postgresql://"):
             v = "postgresql+asyncpg://" + v[len("postgresql://") :]
+        return v
+
+    @field_validator("read_database_url")
+    @classmethod
+    def _read_database_driver(cls, v: str) -> str:
+        if v and not v.startswith(("sqlite+aiosqlite://", "postgresql+asyncpg://")):
+            raise ValueError("read_database_url must use sqlite+aiosqlite or postgresql+asyncpg, or be empty")
         return v
 
     # Pool sizing overrides, e.g. "admin.pool_size=4,background.pool_size=12". Empty = the defaults
@@ -192,6 +211,8 @@ class Settings(BaseSettings):
     platform_key_wiza: str = ""  # Bearer; prepaid API credits, no vendor auto-top-up
     platform_key_limadata: str = ""  # x-api-key; monthly credits with configured auto top-up
     platform_key_getleadsio: str = ""  # Bearer; 1,000 promotional database credits, capped treg trial
+    platform_key_adyntel: str = ""  # JSON body api_key; PAYG credits, manual top-up
+    platform_email_adyntel: str = ""  # JSON body email paired with the Adyntel API key
     platform_key_scrubby: str = ""  # x-api-key; prepaid verification credits
     platform_key_zerobounce: str = ""  # api_key query param; PAYG validation credits, Auto-Pay managed upstream
     platform_key_datagma: str = ""  # apiId query param; prepaid purchased credits, replenished manually
@@ -226,17 +247,32 @@ class Settings(BaseSettings):
     platform_key_fiber_ai: str = ""       # Fiber AI key (x-api-key header, sk_live_…)
     platform_key_tomba: str = ""          # the API key (ta_…); X-Tomba-Key header
     platform_key_tomba_secret: str = ""   # the API secret (ts_…); X-Tomba-Secret — BOTH must be set
+    platform_key_trestleiq: str = ""       # raw key; exact lowercase x-api-key header
     # (tomba's data routes need the header pair; TOMBA.platform_extra_setting names this second slot)
     platform_key_influencersclub: str = ""  # Bearer key (dashboard JWT); creator discovery + enrichment, fx.yaml $0.598/credit (our $299/500 plan)
     platform_key_crustdata: str = ""  # Bearer key; every call also needs the pinned x-api-version header
     platform_key_aviato: str = ""     # Bearer key; $10 auto-top-up buys 1,000 credits
     platform_key_exa: str = ""        # x-api-key; dollar-metered ($7/1k searches, $1/1k pages); settles from costDollars.total
+    platform_key_tavily: str = ""     # Bearer; Search reports per-call usage, other tools settle returned successes
+    platform_key_keenable: str = ""   # X-API-Key; $4/1,000-request package, 10 requests/s per organization
+    platform_key_olostep: str = ""    # Bearer; prepaid credits, platform price $0.002/credit
     platform_key_cloro: str = ""      # Bearer key (sk_live_…); Hobby metered rate $0.0004/credit; settles from X-Credits-Charged
     platform_key_minimax: str = ""    # Bearer key for MiniMax voice, image and video generation
+    platform_key_fishaudio: str = ""  # Bearer key for Fish Audio speech and private voices
+    # Fish API-credit lookups need the workspace selector to read the shared workspace wallet.
+    # This is account metadata, not a credential and not another platform-provider slot.
+    platform_fishaudio_workspace_id: str = ""
+    # The /jev landing page's live demo (application/jev_xboost.py). Both empty = the demo serves the
+    # bundled snapshot and refuses judge requests with 503. `jev_treg_token` is an ordinary member
+    # token of a treg team the demo spends from — treg is a client of itself here, so the page's
+    # receipt is a real bill. `ai_gateway_api_key` is the Vercel AI Gateway key jev answers through.
+    jev_treg_token: str = ""
+    ai_gateway_api_key: str = ""
     platform_key_openrouter: str = ""  # Bearer key for asynchronous routed generation
     platform_key_replicate: str = ""  # Bearer token for official asynchronous models
     platform_key_reapi: str = ""      # Bearer key; prepaid credits at $0.001, Seedance 2.5 + image models
     platform_key_piapi: str = ""      # X-API-Key; prepaid USD balance, Seedance 2.5 less-restriction + image models
+    platform_key_tinyfish: str = ""   # X-API-Key; free Search/Fetch plus Agent billed per terminal step
     # Overflow aggregators (docs/PROVIDER-CAPACITY-PLAN.md §4.3): treg-owned accounts that serve the
     # SAME vendor endpoint when our direct account is out. Env only, never a Secret row, never logged.
     # Not platform_key_* on purpose: they are a credential RUNG (platform-overflow), not a provider.
@@ -260,6 +296,29 @@ class Settings(BaseSettings):
     # it by default" are separate questions, and the second one is answered by traffic, not by
     # argument.
     routed_discovery: str = "on"
+    # The discovery EXPERIMENT (application.search_experiment): a relevance judge (TypeSafe's Jev)
+    # scores a widened lexical recall and the result is compared with the shipped ranker on
+    # behaviour — did the caller go on to `call` something from the page. `off` (default) leaves
+    # search exactly as it is. `shadow` computes and logs both pages, serves the baseline.
+    # `interleave` serves a team-draft merge of both pages to most callers and a pure page to two
+    # holdouts. Any value here is also the kill switch: a bad judge is one env change from off.
+    search_experiment: str = "off"
+    # Per-caller share (each) of the two pure arms in `interleave` mode; the rest is interleaved.
+    search_experiment_holdout_percent: int = 10
+    # Stirs the caller→arm hash, so a rerun of the experiment re-deals the arms.
+    search_experiment_salt: str = ""
+    # Rows the judge sees per query (widened recall), and the probability cut that keeps a row on
+    # the judged page (`keep`) or puts it in its top bucket (`high`).
+    search_experiment_candidates: int = 30
+    search_judge_keep: float = 0.4
+    search_judge_high: float = 0.7
+    # The judge itself. Empty key = the experiment cannot run and every mode behaves as `off`.
+    typesafe_api_key: str = ""
+    typesafe_model: str = "jev-latest"
+    typesafe_url: str = "https://api.typesafe.ai/v1/systemone"
+    # Past this the search answers from the baseline alone; the row records `judge_error=timeout`.
+    # Measured at 30 candidates: about 1.2-1.5 s per answer on a quiet day, so 1.5 sits on the edge.
+    typesafe_timeout_s: float = 2.5
     # DEFAULT per-org, per-UTC-day limit on tier-4 spend, for a team that has not set its own
     # `Org.daily_cap_micro`. 0 = no default limit. A team may set its own figure to anything,
     # including 0 for no limit — the limit is the team's protection against a runaway agent
@@ -511,6 +570,10 @@ class Settings(BaseSettings):
     # response, which is an unauthenticated account-takeover vector in prod — so it defaults OFF and
     # must be explicitly enabled (TREG_EMAIL_DEV_MODE=true) for local testing without a mail sender.
     email_dev_mode: bool = False
+    dashboard_rollout_enabled: bool = False
+    dashboard_rollout_percent: int = Field(default=0, ge=0, le=100)
+    dashboard_rollout_user_ids: set[PositiveInt] = Field(default_factory=set)
+    frontend_dev: bool = False  # Local SQLite development only; use Vite module scripts.
 
     # The WHOLE email-domain blocklist (TREG_BLOCKED_EMAIL_DOMAINS), comma-separated:
     # "example-one.io,example-two.net". There is no list in the code; empty (the default) blocks
@@ -521,6 +584,27 @@ class Settings(BaseSettings):
     # listed domain are suspended out of band, so listing one strands nobody legitimate. A blocklist,
     # deliberately: no allowlist, no table, no admin UI.
     blocked_email_domains: str = ""
+
+    # Sign-in codes for designated accounts that cannot receive email, such as the demo account an
+    # app directory's reviewers use: `email=<sha256 hex of the code>,...`. For a listed email the
+    # email-code door sends nothing and accepts only the configured code, under the same attempt and
+    # start limits as an emailed one. Only the hash is configured; use a long random code. Empty
+    # (the default) leaves every email on the normal emailed code.
+    fixed_login_codes: str = ""
+
+    @field_validator("fixed_login_codes")
+    @classmethod
+    def _fixed_login_codes_shape(cls, v: str) -> str:
+        for part in (p for p in v.split(",") if p.strip()):
+            email, sep, digest = part.partition("=")
+            if not sep or "@" not in email or not re.fullmatch(r"[0-9a-fA-F]{64}", digest.strip()):
+                raise ValueError("fixed_login_codes entries must be email=<64-hex sha256>")
+        return v
+
+    @property
+    def fixed_login_code_hashes(self) -> dict[str, str]:
+        """The normalised `TREG_FIXED_LOGIN_CODES` entries; empty = no designated accounts."""
+        return _fixed_login_codes(self.fixed_login_codes)
 
     @property
     def blocked_email_domain_set(self) -> frozenset[str]:

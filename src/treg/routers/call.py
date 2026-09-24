@@ -239,7 +239,7 @@ async def _stamp_call_exit(
             method=request.method, path=request.url.path, status_code=status_code,
             client=_client_of(request), refused_by=_refusal_kind(status_code),
             api_key_id=key_id, api_key_name=key_name, api_key_prefix=key_prefix,
-            telemetry={"call_ref": call_ref})
+            telemetry={"call_ref": call_ref, "tags": getattr(request.state, "call_pins", None)})
         if failure_kind:
             _capture_exceptional_call(
                 request, call_ref=call_ref, status_code=status_code, failure_kind=failure_kind)
@@ -292,6 +292,9 @@ async def call_tool(
     # tool, deny rule, daily cap) leaves this handler without an audit row, and the exception handler
     # is the one place every such refusal passes through — but it has no Caller of its own.
     request.state.call_identity = (caller.org_id, caller.email)
+    # The pin too: a pinned caller's history is filtered on it, and a refusal (403 on a pin
+    # mismatch above all) is the row they most need to see while integrating.
+    request.state.call_pins = dict(caller.membership.pinned_tags or {}) or None
     request.state.call_team_slug = caller.org.slug
     request.state.call_key = (
         caller.api_key.id if caller.api_key else None,

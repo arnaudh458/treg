@@ -13,6 +13,7 @@ from urllib.parse import quote
 from sqlalchemy import select, update
 
 from .. import archive, oauth_providers
+from ..domain.governance.access import pinned_tag_predicates
 from ..domain import asynctasks
 from ..domain import money as ledger
 from ..domain.catalog import store as catalog_store
@@ -41,7 +42,7 @@ def _json_value(value: object) -> object:
     return json.loads(json.dumps(value, default=lambda item: item.isoformat()))
 
 
-async def defer_submission(mk, body: bytes, org_id: int) -> int:
+async def defer_submission(mk, body: bytes, org_id: int, *, tags: dict | None = None) -> int:
     """Persist the pending task before allowing the request path to leave its hold open."""
     now = utcnow_naive()
     # The request path has already established that this body is JSON and carries the task id
@@ -55,6 +56,7 @@ async def defer_submission(mk, body: bytes, org_id: int) -> int:
             raise RuntimeError("async submission hold disappeared before persistence")
         row = AsyncTaskRecord(
             call_id=str(mk.call_id), org_id=org_id, provider=mk.provider,
+            tags=dict(tags) if tags else None,
             endpoint_id=mk.endpoint_id, task_id=task_id, poll_url=poll_url,
             reserved_micro=hold.amount_micro, descriptor=_json_value(mk.async_descriptor or {}),
             settlement_basis=_json_value(mk.settlement_basis),
@@ -100,11 +102,13 @@ async def _remember_resource(db, row: AsyncTaskRecord, kind: str, resource_id: s
         db.add(AsyncResourceRecord(
             org_id=row.org_id, provider=row.provider, resource_kind=kind,
             resource_id=resource_id, source_call_id=row.call_id,
+            tags=dict(row.tags) if row.tags else None,
         ))
 
 
 async def remember_platform_resources(
     org_id: int, provider: str, call_id: str, rule: dict, body: bytes,
+    *, tags: dict | None = None,
 ) -> int:
     """Persist opaque ids a successful call created on treg's shared provider account."""
     try:
@@ -132,6 +136,7 @@ async def remember_platform_resources(
                 db.add(AsyncResourceRecord(
                     org_id=org_id, provider=provider, resource_kind=kind,
                     resource_id=resource_id, source_call_id=call_id,
+                    tags=dict(tags) if tags else None,
                 ))
                 added += 1
         await db.commit()
@@ -152,13 +157,15 @@ async def observe_owned_poll(call_id: str, status_code: int, body: bytes) -> str
             return "noop"
         snapshot = row.model_copy()
     outcome = asynctasks.classify_terminal(snapshot.descriptor, document)
-    if outcome not in ("success", "failure"):
+    if outcome not in ("success", "failure", "billed_failure"):
         return "noop"
     return await _finish_terminal(
         snapshot, outcome, document, status_code, body, utcnow_naive(), require_usage=True)
 
 
-async def views_for(org_id: int, call_ids: list[str]) -> dict[str, dict]:
+async def views_for(
+    org_id: int, call_ids: list[str], *, pinned_tags: dict | None = None,
+) -> dict[str, dict]:
     """The task's own account of each metered async call, keyed by call id, for activity displays.
 
     The audit row froze the reserve as "charged" at submission; this is where the display learns
@@ -172,6 +179,7 @@ async def views_for(org_id: int, call_ids: list[str]) -> dict[str, dict]:
         rows = (await db.execute(
             select(AsyncTaskRecord).where(
                 AsyncTaskRecord.org_id == org_id,
+                *pinned_tag_predicates(AsyncTaskRecord.tags, pinned_tags),
                 AsyncTaskRecord.call_id.in_(list(call_ids))))).scalars().all()
     if not rows:
         return {}
@@ -304,9 +312,10 @@ async def _finish(call_id: str, outcome: str, document: object | None, now, *,
             return "noop"
         if expected_attempt is not None and row.attempts != expected_attempt:
             return "noop"
-        if outcome in ("success", "failure") and asynctasks.expired(row.created_at, now):
+        if outcome in ("success", "failure", "billed_failure") and asynctasks.expired(row.created_at, now):
             outcome = "timed_out"
-        if outcome in ("success", "failure", "timed_out") and await db.get(Hold, call_id) is None:
+        if outcome in ("success", "failure", "billed_failure", "timed_out") \
+                and await db.get(Hold, call_id) is None:
             # The request path already closed this hold (cancelled at the commit boundary, or
             # reaped): there is no money left to move, and a row "settled" at zero would lie.
             row.status = asynctasks.RELEASED
@@ -316,12 +325,13 @@ async def _finish(call_id: str, outcome: str, document: object | None, now, *,
             await db.commit()
             log.warning("async task %s reached %s but its hold was already closed", call_id, outcome)
             return row.status
-        if outcome == "success":
+        if outcome in ("success", "billed_failure"):
             evidence = {"terminal": document}
-            row.result_id = _result_id(row.descriptor, document)
-            fetch = (row.descriptor or {}).get("result") or {}
-            if row.result_id is not None and fetch.get("fetch"):
-                await _remember_resource(db, row, f"fetch:{fetch['fetch']}", row.result_id)
+            if outcome == "success":
+                row.result_id = _result_id(row.descriptor, document)
+                fetch = (row.descriptor or {}).get("result") or {}
+                if row.result_id is not None and fetch.get("fetch"):
+                    await _remember_resource(db, row, f"fetch:{fetch['fetch']}", row.result_id)
             unobserved = (row.settlement_basis["amount"]["kind"] == "usage"
                           and settlement.usage_evidence(row.settlement_basis, evidence) is None)
             if unobserved and require_usage:
@@ -337,9 +347,12 @@ async def _finish(call_id: str, outcome: str, document: object | None, now, *,
                           row.call_id, row.provider, row.endpoint_id)
             row.settled_micro = await ledger.settle_in_transaction(db, row.call_id, raw, meta={
                 "provider": row.provider, "cost_source": row.settlement_basis["amount"]["kind"],
-                "async_task": True, **({"reconcile_review": True} if unobserved else {}),
+                "async_task": True, "terminal_outcome": outcome,
+                **({"reconcile_review": True} if unobserved else {}),
             })
             row.status = asynctasks.SETTLED
+            if outcome == "billed_failure" and not row.error:
+                row.error = "provider reported a billable terminal failure"
         elif outcome == "failure":
             await ledger.release_in_transaction(db, row.call_id, reason="async_task_failed",
                                                 meta={"provider": row.provider, "async_task": True})
@@ -378,7 +391,7 @@ async def _finish_terminal(snapshot: AsyncTaskRecord, outcome: str, document: ob
     """One settlement and evidence path for caller polling and the recovery worker."""
     result = await _finish(snapshot.call_id, outcome, document, now, require_usage=require_usage,
                            expected_attempt=expected_attempt)
-    expected = asynctasks.SETTLED if outcome == "success" else asynctasks.RELEASED
+    expected = asynctasks.SETTLED if outcome in ("success", "billed_failure") else asynctasks.RELEASED
     if result == expected:
         # Only the winning finalizer records evidence; a late poll cannot replace the result
         # whose usage was charged. Archive failure cannot undo the committed money transaction.
@@ -413,7 +426,7 @@ async def _process(call_id: str, client: httpx.AsyncClient, attempt: int) -> str
             return await _finish(call_id, "poll_error", None, utcnow_naive(), expected_attempt=attempt)
         document = json.loads(body)
         outcome = asynctasks.classify_terminal(snapshot.descriptor, document)
-        if outcome in ("success", "failure"):
+        if outcome in ("success", "failure", "billed_failure"):
             return await _finish_terminal(snapshot, outcome, document, status, body, utcnow_naive(),
                                           expected_attempt=attempt)
         return await _finish(call_id, outcome, document, utcnow_naive(), expected_attempt=attempt)

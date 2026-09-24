@@ -53,6 +53,18 @@ async def _cursor() -> EndpointStatCursor | None:
         return await db.get(EndpointStatCursor, catalog_stats.CURSOR_ID)
 
 
+async def test_naive_datetime_comparisons_do_not_raise_type_error(clients):
+    """Regression test: SQLModel 0.0.45 changed datetime handling, breaking naive comparisons.
+
+    The catalog stats worker compares `created_at` (from DB) with `since` (from utcnow_naive()).
+    Before the NaiveUTC annotation fix, SQLModel 0.0.45 would return aware datetimes from the DB,
+    causing: TypeError: can't compare offset-naive and offset-aware datetimes
+    """
+    await _record(EP, 200, 100, ago=timedelta(days=1))
+    result = await catalog_stats.refresh(now=_now())
+    assert result["rows"] >= 0
+
+
 async def test_buckets_publish_exactly_what_the_live_aggregate_publishes(clients):
     """Same rows, same numbers: every rule the live query encodes in SQL, the fold encodes in
     Python, and `publish` is shared. A drift here is a catalog that changes its mind about a

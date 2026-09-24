@@ -78,6 +78,14 @@ _DATAPLANE_DERIVED_WRITES = {
     "async_resource_ownership": (
         (service._execute_call, "async_task_app.remember_platform_resources"),
     ),
+    # Shared-key resource lifecycle state is part of the call's security boundary: create must
+    # establish ownership before returning the upstream id, and update/delete change local state
+    # only after the provider succeeds. All three mutations share the post-relay transaction.
+    "provider_resource_ownership": (
+        (service._apply_managed_resource_result, "provider_resources.register"),
+        (service._apply_managed_resource_result, "provider_resources.rename"),
+        (service._apply_managed_resource_result, "provider_resources.tombstone"),
+    ),
     # The per-user daily cap takes its slot with one conditional UPDATE of the member's row
     # (revision 0024) instead of counting the member's callrecord rows per call.
     "member_daily_cap_slot": (
@@ -98,6 +106,7 @@ _EXPECTED_DATAPLANE_WRITES = frozenset({
     "overflow_budget_reservation",
     "async_result_ownership",
     "async_resource_ownership",
+    "provider_resource_ownership",
     "member_daily_cap_slot",
 })
 _DERIVED_WRITE_FILES = {
@@ -122,6 +131,9 @@ _DERIVED_WRITE_FILES = {
         "archive.record",
         "async_task_app.observe_owned_poll",
         "async_task_app.remember_platform_resources",
+        "provider_resources.register",
+        "provider_resources.rename",
+        "provider_resources.tombstone",
     },
     _SRC / "domain" / "capacity" / "marks.py": {"ratestore.kv_put", "ratestore.kv_pop"},
     _SRC / "domain" / "governance" / "publicdemo.py": {
@@ -163,6 +175,12 @@ _EXPECTED_DERIVED_WRITE_SITES = {
      "async_task_app.observe_owned_poll"),
     ("application/call/service.py", "_execute_call",
      "async_task_app.remember_platform_resources"),
+    ("application/call/service.py", "_apply_managed_resource_result",
+     "provider_resources.register"),
+    ("application/call/service.py", "_apply_managed_resource_result",
+     "provider_resources.rename"),
+    ("application/call/service.py", "_apply_managed_resource_result",
+     "provider_resources.tombstone"),
     ("domain/capacity/marks.py", "strike", "ratestore.kv_put"),
     ("domain/capacity/marks.py", "clear", "ratestore.kv_pop"),
     ("domain/governance/publicdemo.py", "enforce_public_demo_ip_cap", "ratestore.rate_check"),

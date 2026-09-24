@@ -2,6 +2,9 @@
 title: Money — prepaid balance, the ledger, Stripe, and the reports that check it
 status: shipped
 sources:
+  - src/treg/catalog/tavily.yaml
+  - src/treg/catalog/tinyfish.yaml
+  - tests/test_tinyfish.py
   - src/treg/domain/money/__init__.py
   - src/treg/domain/money/settlement.py
   - src/treg/domain/asynctasks/__init__.py
@@ -34,6 +37,7 @@ sources:
   - src/treg/routers/orgs.py
   - src/treg/routers/referrals.py
   - tests/test_call_architecture.py
+  - tests/test_marketplace_call.py
   - tests/test_asynctasks.py
 related:
   - architecture/catalog.md
@@ -44,16 +48,23 @@ related:
 
 # Money
 
+TrestleIQ charges USD 0.015 for Phone Validation, USD 0.03 for Real Contact, and USD 0.01 for
+Address Validation. Every HTTP 200 response is billable, including a negative verdict; 4xx and 5xx
+responses are free. Phone Validation was isolated with an exact two-call wallet delta. One
+additional controlled call to each product produced the expected rounded aggregate wallet delta,
+verifying the Real Contact and Address prices together. The three tools use generic `per_call`
+settlement.
+
 LimaData converts credits at the assigned account's sustainable automatic-top-up replacement rate:
 $100 for 6,667 credits, rounded up to $0.015 per credit. Only fixed, synchronous prices use the
 shared key. Variable charges, a route billed on HTTP 404, extraction modifiers, and asynchronous
-refunds remain BYOK-only, so no LimaData settlement branch is needed. See [LimaData](limadata.md).
+refunds remain BYOK-only, so no LimaData settlement branch is needed.
 
 MoltSets is the first real `treg_shared_plan` catalog rate: $0.01 per ordinary successful record on
 the flat $27 subscription. Its verified 5,000-record weekly allowance is conservatively 20,000 per
 four-week month, so the disclosed 2,700-call monthly break-even is 13.5% utilization. Generic
 success-only settlement handles its eligible tools; variable, batch, and dual-meter phone operations
-stay BYOK-only. See [MoltSets](moltsets.md).
+stay BYOK-only.
 
 A catalogued endpoint can be served on **treg's own key** - no provider signup for the caller - which
 means treg pays the provider and bills the team. That needs a balance, a way to top it up, and a way
@@ -235,6 +246,9 @@ evidence settles the original task once under its row lock. Caller success witho
 only learns result ownership and leaves the hold for a later observation; worker fallback retains
 its reserve-based settlement with a reconciliation alert. Settlement errors leave the provider
 response unchanged and cron retries. Only the winning finalizer archives terminal evidence.
+An async status declared as `billed_failure` is still presented as failure by the CLI, but the
+worker settles its usage evidence and records the terminal outcome; this covers cancellation after
+billable work without manufacturing a successful result.
 
 The worker selects due candidates, acquires provider/global concurrency slots, then atomically
 claims each still-due row. `attempts` fences stale workers from changing a newer claim's state.
@@ -253,7 +267,10 @@ deadline it releases the hold in full**, marks the row `timed_out` with `reconci
 an ERROR-level alert: an outcome nobody observed is the platform's cost, never the customer's, and a
 provider that silently changed its status field shows up as absorbed timeouts in
 `reconcile.async_task_settlement` (`absorbed_timeouts`) rather than as a quiet overcharge.
-Platform-key poll and fetch calls are authorized against the caller org's row before relay. A
+Platform-key poll and fetch calls are authorized against the caller org's row before relay, and
+against all membership pins when present. `defer_submission` freezes effective tags on the task;
+`_remember_resource` propagates them to later resource ids. `remember_platform_resources` freezes
+successful non-deferred submissions too. Missing legacy tags fail closed for pinned readers. A
 successful caller-driven poll may see a fetch-mode result id before the worker does, so the buffered
 terminal response records that id on the same row; the worker records it as part of settlement too.
 This makes the durable record both the hold owner and the authority for later shared-account objects.
@@ -280,17 +297,18 @@ ate what the team's blocks could not cover). A success whose terminal response c
 figure settles at the reserve with `reconcile_review` and an ERROR alert, never at the ceiling.
 When the pending row itself cannot be persisted, the request path releases the
 hold with reason `async_task_not_recorded` and logs an ERROR alert - the same doctrine, since nobody
-will observe that task's outcome. Two usage units settle: `usd` (OpenRouter's `usage.cost`) and
-`credit`, the provider's own credit priced by its `credit_rates_usd` entry in fx.yaml (reAPI's
-`usage.credits`). The credit's micro-USD worth is frozen into the basis as `amount.unit_micro` at
-reserve, so a later fx edit never re-prices a task in flight, and a credit basis with no frozen rate
-settles at the reserve rather than reading credits as dollars. The table is then only the reserve:
+will observe that task's outcome. Usage can settle in `usd` (OpenRouter's `usage.cost`), `credit`
+priced by the provider's `credit_rates_usd` entry (reAPI's `usage.credits`), or a provider-native
+meter priced by `unit_rates_usd[provider][unit]` (for example an Agent step). The unit's micro-USD
+worth is frozen into the basis as `amount.unit_micro` at reserve, so a later rate edit never
+re-prices a task in flight; a non-USD basis with no frozen rate settles at the reserve rather than
+reading native units as dollars. The table is then only the reserve:
 a table-settled video row once billed its fallback ceiling for the provider's mandatory `duration: -1`
 (auto) mode, because the frozen request re-prices identically at settle. A token unit returns with
 the first metered token-priced listing, together with its fx rule and a live test. Ledger writes remain exclusively through `domain/money`.
 
 The audit row (`CallRecord`) froze the reserve as `cost_charged_micro` at submission, so displays
-must not read it alone. `application.asynctasks.views_for(org_id, call_ids)` is the read side: it
+must not read it alone. `application.asynctasks.views_for(org_id, call_ids, pinned_tags=...)` is the read side: it
 joins the org's `AsyncTaskRecord`s, loads the archived terminal JSON for settled ones, and derives
 the artifact with the pure `domain.asynctasks.artifact(descriptor, terminal)` - the first URL under
 `result.path`, or the `{endpoint, name, value}` retrieval target for fetch-mode descriptors (the
@@ -490,7 +508,12 @@ Provider-specific calculation stays outside the faithful relay.
 
 | Evidence | Settlement behavior |
 |---|---|
-| Reported charge | DataForSEO `cost`, ScrapeCreators and Dropleads finder/verifier `credits_charged`, Akta and Dropleads person enrichment `credits_consumed`, Dropleads company `credits.creditsDeducted`, Lusha `billing.creditsCharged`, Exa `costDollars.total`, and Prospeo bulk `total_cost`; credit amounts use the catalog FX rate |
+| Generic catalog-reported charge | A paid synchronous cost may name `reported_charge.path` with unit `usd`. A finite nonnegative response value, including zero, settles exactly; invalid or absent evidence falls through to the normal estimate/miss behavior |
+| Tavily Search | Reserve one credit for Basic, Fast and Ultra-fast or two for Advanced and an auto-selected depth; an explicit Basic depth overrides automatic selection. Platform Search requires caller-supplied `include_usage: true` and settles finite nonnegative per-request `usage.credits`. Empty results remain a paid routing miss. Missing or malformed usage keeps the frozen reserve. BYOK is unmetered and need not request usage. The endpoint-specific rate table must be complete, positive and finite; catalog validation rejects bad declarations and runtime refuses the call before reserve or relay instead of pricing it at zero |
+| Tavily Extract | Reserve the requested URL count (bounded by the documented 20-URL maximum) at 0.2 credit per Basic or 0.4 per Advanced extraction. Settle that fractional allocation for each valid entry in `results`; `failed_results` and grouped `usage.credits` do not charge the caller. A documented empty results list is free; malformed evidence keeps the frozen reserve |
+| Tavily Map | Platform calls require an explicit integer `limit` from 1 to 20. Reserve that many pages at 0.1 credit each, or 0.2 when the caller supplied nonempty `instructions`; settle valid URL strings in `results` at the frozen per-page unit. Empty results are free, malformed evidence keeps the reserve, and grouped `usage.credits` is ignored |
+| Tavily Crawl | Platform calls require the same 1-20 limit. Reserve per returned extraction at 0.3 credit (Basic), 0.4 (Basic + instructions), 0.5 (Advanced), or 0.6 (Advanced + instructions), then settle valid extracted entries in `results`. This is a conservative deterministic allocation, not the exact Tavily account charge: the response does not expose every page successfully mapped before extraction. treg absorbs any hidden mapping difference, bounded by the 20-page platform cap. Grouped `usage.credits` is ignored and BYOK remains unmetered |
+| Legacy reported charge | DataForSEO `cost`, ScrapeCreators and Dropleads finder/verifier `credits_charged`, Akta and Dropleads person enrichment `credits_consumed`, Dropleads company `credits.creditsDeducted`, Lusha `billing.creditsCharged`, Exa `costDollars.total`, and Prospeo bulk `total_cost`; credit amounts use the catalog FX rate |
 | Crustdata, cloro, AI Ark | Read the charge from a response header through `_CREDIT_HEADERS` using the same FX rate. Crustdata `X-Credits-Used` and cloro `X-Credits-Charged` are positive charges; AI Ark `X-Credit` is a negative debit and declares an explicit -1 multiplier. Invalid signs and non-finite values are ignored. cloro omits the header on its free routes and on a failed extraction, neither of which it bills, so an absent header settles at the estimate, not at zero |
 | cloro reserve | `cost.value` is the full-surface `test_request` price (ChatGPT 9, Google SERP 7); the plain call settles lower from the header (verified live 2026-09-07 at the then-Lite rate: reserve 7,200 µ$, settled 5,600, refunded 1,600; at the Hobby rate 3,600 → 2,800, re-verified 2026-09-14). The top-level `state` body field is a `cost.modifiers` rider (+2 credits) reserved through the same generic path Aviato uses, which is open to any credit-priced provider with a FX rate |
 | Apollo | Known empty organization results are free |
@@ -919,8 +942,8 @@ its existing explicit charge/no-charge prose handling is a separate billing sign
 
 ## Kitt AI response billing
 
-`_observed_cost_micro` reads the catalog's `cost.reported_charge.path` in USD
-(`unit: usd`), converting with Decimal to integer micro-USD. Kitt's two realtime
+`_observed_cost_micro` reads the catalog's `cost.reported_charge.path` in USD,
+converting with Decimal to integer micro-USD. Kitt's two realtime
 endpoints declare `credits.jobCredits`; there is no provider-specific billing branch. Finite nonnegative values,
 including zero, override the estimate; malformed, negative, boolean or null values
 fall through to the verified miss rule and documented base estimate. Find misses
@@ -939,7 +962,7 @@ balance update. Free-plan null charge fields use the same documented fallback po
 from returned profiles using the YAML Starter micro-USD rates. It reuses the existing money lifecycle.
 Profile-only LinkedIn enrichment reserves and settles 20,000 micro-USD when a profile is found;
 misses remain free. Platform reveal search requires an explicit page size to bound its hold.
-Own keys are unmetered; see [ContactOut](contactout.md) for prices, free verification and evidence limits.
+Own keys are unmetered.
 
 ## The hub seller's price (`earned`, `settle_to_in_transaction`)
 
@@ -980,7 +1003,7 @@ label is released and retrying performs another free read. MIME type never decid
 
 ## HarvestAPI integration
 
-HarvestAPI reuses `cost.reported_charge` with path `cost` in USD. Billed misses retain their reported charge; wallet reads may lag and are never per-call evidence. Profile variants reserve their own scalar price. See [HarvestAPI](harvestapi.md).
+HarvestAPI reuses `cost.reported_charge` with path `cost` in USD. Billed misses retain their reported charge; wallet reads may lag and are never per-call evidence. Profile variants reserve their own scalar price.
 
 
 ## Dropleads credit settlement
@@ -990,7 +1013,7 @@ requested bulk count or company-search limit. `_observed_cost_micro` then reads 
 reported credit use from its three verified response shapes. A finite, nonnegative value, including
 zero, replaces the estimate. A known email-finder `not_found` response also settles at zero when the
 provider omits the numeric field. Missing or malformed evidence keeps the estimate. BYOK calls do
-not enter this money path. See [Dropleads](dropleads.md) for the endpoint limits and verified costs.
+not enter this money path.
 
 
 ## Prospeo credit settlement
@@ -1001,4 +1024,13 @@ credit-modifier path performs the arithmetic and a missing FX rate retains the o
 instead of raising. `_prospeo_cost_micro` settles bulk calls from finite nonnegative `total_cost`,
 single enrichments from endpoint-specific success evidence plus `free_enrichment`, searches from
 `free` and the result list, and suggestions at zero. Non-finite or malformed numeric evidence keeps
-the estimate for reconciliation. BYOK calls never enter this money path. See [Prospeo](prospeo.md).
+the estimate for reconciliation. BYOK calls never enter this money path.
+
+## Pinned attribution and replay reads
+
+`reserve_in_transaction` writes `meta.tags` from its authoritative `tags` argument, overriding any
+same-named caller provenance. The append-only reserve entry survives hold release and provides the
+ownership proof for `/calls/{call_ref}` when audit was shed. Amounts and settlement rules are unchanged.
+`_scoped_idempotency_key` also folds in every membership pin; unpinned primary-tag scoping is unchanged.
+The shared-provider label includes the pin too (`scope_shared_idempotency_key`), preventing two
+customers' identical labels from resolving to one upstream job. BYOK labels remain verbatim.

@@ -138,6 +138,8 @@ same-named team tool. A change is incomplete if only one relevant MCP test file 
 | `catalog_search` | find endpoints by what you want to DO, with prices |
 | `catalog_get` | one endpoint in full: params, cost, reliability, sibling providers |
 | `call` | a catalog endpoint by id, or `<tool-name>/<path>` for the team's own tool |
+| `call_media` | the same `/call/` path for audio endpoints, returned as native `AudioContent` plus structured call/cost metadata |
+| `resources_list` | calls the unified provider-resource API; Fish voice listing uses the connected Fish account when BYOK exists, otherwise the active team's platform voices |
 | `balance` | the team's prepaid balance |
 | `my_tools` | what the team registered that can be called without holding the key |
 | `feedback` | submit a private problem report or suggestion |
@@ -172,7 +174,11 @@ rate-limit bucket. `catalog_search`'s zero-result hint names it, so an agent tha
 and found nothing can file the gap in the same session — and the miss itself is logged as a
 `SearchMiss` row (`audit.record_search_miss`, `source="mcp"` on the team MCP and
 `source="claude-connector"` on V2): this tool reads the catalog in-process, so the HTTP route's own
-miss logging never sees an MCP agent's empty search.
+miss logging never sees an MCP agent's empty search. Both MCP search tools also take the caller's
+`Context`: while `search_experiment` is not `off`, the search runs through the
+[discovery experiment](search-experiment.md), which may serve a judged or interleaved page and logs
+a `SearchLog` row with the caller's team and email — the HTTP route, being anonymous, is not part
+of it.
 
 ## In-process, not over the network
 
@@ -494,8 +500,9 @@ A signed-out visitor to `/oauth/authorize` has the destination parked in a short
 cookie and is redirected to `/?signin=oauth`. The dashboard opens the existing sign-in modal with
 generic connection copy, removes the query parameter from the visible URL, and does not create a
 sandbox session. The query parameter is only a UI cue; it contains no OAuth request data. Google,
-GitHub, and email-code sign-in all return to the dashboard, which resumes the parked authorization
-request. The cookie stores a relative path and honours only `/oauth/authorize`, so it cannot become a
+GitHub, and email-code sign-in all resume the parked authorization request: the social callbacks
+land on `/app`, and the email-code door reloads `/`, where the modal opened; both resume once signed
+in. The cookie stores a relative path and honours only `/oauth/authorize`, so it cannot become a
 general "send me anywhere after login" primitive.
 
 ## `/connect-demo`
@@ -565,6 +572,11 @@ header. `curl {BASE}/install.sh | sh -s -- --token <key>` runs the whole thing �
 Catalog-call tools also expose an optional `authorization_method`. MCP maps that explicit argument
 to treg's internal `X-Treg-Authorization-Method` routing header; caller-supplied headers cannot
 override it, and the header is not relayed to the provider.
+
+The generic `call` surfaces accept optional `form` scalar fields and base64 `uploads`, capped at 30
+MiB before the internal request, so multipart voice creation does not change the existing JSON call
+contract. `/mcp/v2/` names the audio tool `catalog_call_media`; both surfaces independently register
+and test `resources_list`. Native audio never passes through JSON/text decoding.
 
 `X-Treg-Meta` (see [money](money.md)) is read off the MCP **transport** in `mcp.call()` and forwarded
 on the internal request, the same way `catalog_request` forwards `X-Forwarded-For`. It is deliberately

@@ -26,6 +26,42 @@ def test_parser_dispatches_core():
     assert p.parse_args(["secret", "add", "k", "--value", "v"]).fn is cli.cmd_secret_add
     assert p.parse_args(["tool", "add", "t", "--base-url", "http://x", "--secret", "1"]).fn is cli.cmd_tool_add
     assert p.parse_args(["call", "echo", "get", "--query", "a=1"]).fn is cli.cmd_call
+    resources = p.parse_args(["resources", "list", "--provider", "fishaudio", "--kind", "voice"])
+    assert resources.fn is cli.cmd_resources_list
+    assert resources.provider == "fishaudio" and resources.kind == "voice"
+
+
+def test_resources_list_uses_the_unified_server_endpoint(monkeypatch, capsys):
+    calls = []
+
+    class Response:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def __init__(self, body): self.body = body
+        def json(self): return self.body
+
+    class Client:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def get(self, path, params=None):
+            calls.append((path, params))
+            if path == "/orgs":
+                return Response([{"org_id": 7, "slug": "team", "active": True}])
+            return Response([{"provider": "fishaudio", "kind": "voice",
+                              "upstream_id": "voice-1", "display_name": "Narrator"}])
+
+    monkeypatch.setattr(cli, "_client", lambda cfg: Client())
+    args = type("Args", (), {
+        "provider": "fishaudio", "kind": "voice", "include_deleted": False,
+    })()
+    cli.cmd_resources_list(args, {"base_url": "http://registry", "active_org": "team"})
+    assert calls == [
+        ("/orgs", None),
+        ("/orgs/7/provider-resources", {"provider": "fishaudio", "kind": "voice"}),
+    ]
+    assert '"upstream_id": "voice-1"' in capsys.readouterr().out
 
 
 def test_call_named_and_single_url():
@@ -1101,6 +1137,13 @@ def test_show_prints_the_charge_and_call_id_for_a_metered_success(capsys):
     cli._show(replay)
     _, err = capsys.readouterr()
     assert "replay" in err and "nothing new charged" in err
+
+    async_submission = httpx.Response(200, content=b'{"run_id":"r1"}', headers={
+        "content-type": "application/json", "X-Treg-Cost-Micro": "2400000",
+        "X-Treg-Async": "{}", "X-Treg-Call-Id": "async1"})
+    cli._show(async_submission)
+    _, err = capsys.readouterr()
+    assert err.strip() == "treg: reserved up to $2.4 for async settlement · call id async1"
 
 
 

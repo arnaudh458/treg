@@ -2,6 +2,7 @@
 title: Data model — the registry tables, async DB, audit writer
 status: shipped
 sources:
+  - src/treg/alembic/versions/0042_pinned_read_scope.py
   - alembic.ini
   - src/treg/alembic/env.py
   - src/treg/alembic/versions/0001_baseline_current_schema.py
@@ -37,7 +38,11 @@ sources:
   - src/treg/alembic/versions/0031_archive_result_admission.py
   - src/treg/alembic/versions/0032_archive_body_storage.py
   - src/treg/alembic/versions/0039_archive_own_key_and_repeat_pricing.py
+  - src/treg/alembic/versions/0043_provider_resources.py
+  - src/treg/domain/provider_resources.py
+  - src/treg/routers/provider_resources.py
   - src/treg/alembic/versions/0033_signup_promo_eligibility.py
+  - src/treg/alembic/versions/0041_searchlog.py
   - src/treg/timeutil.py
   - src/treg/infra/db.py
   - src/treg/domain/referrals.py
@@ -57,6 +62,13 @@ related:
 ---
 
 # Data model
+
+Migration `0043` adds `ProviderResource`, the durable organization-owned counterpart to the existing
+async ownership rows. It stores provider, resource kind, upstream id, display name, creator, source
+call, lifecycle state and timestamps. `(provider, resource_kind, upstream_id)` is globally unique so
+one shared-account object cannot be assigned to two organizations. Deletes tombstone rows, preserving
+retry authorization and auditability. `GET /orgs/{org_id}/provider-resources` exposes only the active
+member's organization and filters by provider/kind. BYOK objects are never written here.
 
 Revision `0027` adds `ArenaRun` and `ArenaEvaluation` for [Enrich Arena](../interface/enrich-arena.md).
 Runs freeze encrypted inputs, adapter requests, outcomes and receipts; evaluations record an immutable
@@ -313,6 +325,14 @@ uses this metadata, never the encrypted token's shape.
   analytics, never a search) from both search paths - `GET /catalog/search` and the in-process MCP
   `catalog_search` tool. Deliberately identity-free; surfaced by `scripts/usage_report.py`, which
   reads misses against the catalog to split coverage gaps from naming/discovery failures.
+- **`SearchLog`** (0041) - one MCP catalog search under the **discovery experiment** (see
+  [search-experiment](search-experiment.md)): `query`, `source`, the caller's `org_id`/`user_email`
+  (the outcome is that caller's later `call`, so this row is NOT identity-free), `mode`, `arm`, the
+  `baseline_ids` page, the `judged` page as `[id, probability]` rows, the `shown` page as
+  `[id, owner]` rows, `baseline_total` (0 = the lexical gate admitted nothing), `differs`, and the
+  judge's `judge_ms` / tokens / `judge_error`. Written fire-and-forget through
+  `audit.record_search`; read by `scripts/search_experiment_report.sql` joined to `CallRecord`.
+  Nothing is written while `search_experiment` is `off`.
 - **`RunRecord`** - the **server-side run** audit row (a `treg run --server` CLI execution - the "kind"
   `server_run` in usage rollups): `org_id`, `user_email`, `bundle_name` (holds the **tool** name since the
   tool-side run unification; column name is historical), `argv` (JSON - never carries a secret value;
@@ -400,6 +420,17 @@ TIME ZONE` and asyncpg rejects tz-aware values on Postgres; the app compares nai
 Shared request-time conversions live in `timeutil.utcnow_naive` and `timeutil.as_naive`, re-exported
 temporarily as `api._utcnow_naive` and `api._as_naive` during the staged router migration. Query
 parameters compared with timestamp columns follow the same constraint as inserted or updated values.
+
+`TREG_READ_DATABASE_URL` optionally adds a separate SQLite / PostgreSQL engine and
+`read_session_maker`. PostgreSQL defaults its transactions to read-only; SQLite enables
+`PRAGMA query_only` on dedicated read connections without affecting the primary. These guard
+accidental writes, not deliberate SQL that disables the settings. The engine is included in
+disposal, but never schema writes; PostgreSQL also exposes its `read` pool in telemetry.
+An empty URL aliases the existing primary session maker with unchanged write behavior;
+configured datasource failures propagate without primary fallback. No business caller uses this
+datasource yet. Provisioning/replication, replica lag and each caller's write boundaries must be
+handled before opting in; a URL alone does not synchronize databases or add other dialect support.
+See [deploy](../ops/deploy.md) § Optional read replica for configuration and connection budgeting.
 
 ## Alembic execution and the adoption floor
 
@@ -566,7 +597,10 @@ records), `budget_dim`/`budget_val` (the indexed copy of the primary pair) and `
 
 `Org` gains `budget_dims` (which keys may carry budgets, ≤3), `primary_dim` (the one that scopes
 idempotency) and `daily_cap_micro` (the team's own spend ceiling, 0 = follow the deployment default).
-`Membership` gains `pinned_tags`.
+`Membership` gains `pinned_tags`. Revision `0042` adds nullable `tags` snapshots to `RunRecord`,
+`AsyncTaskRecord` and `AsyncResourceRecord`. No historical ownership is inferred: NULL snapshots
+are invisible to pinned readers. The reserve `LedgerEntry.meta.tags` freezes effective attribution
+without a new ledger column, allowing scoped ledger-only reads after audit loss or release.
 
 The columns are part of the Alembic baseline schema (the legacy startup migrations that once added
 them are deleted); `TagSpend` and `TagBudget` are ordinary baseline tables.

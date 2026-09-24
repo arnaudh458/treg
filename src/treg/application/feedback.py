@@ -6,6 +6,7 @@ from sqlmodel import select
 from .. import hints, ratestore
 from ..domain import feedback
 from ..domain.feedback import reviews
+from ..domain.governance.access import pinned_tag_predicates
 from ..feedback_contract import FeedbackCategory, ReviewUsefulness
 from ..infra.db import session_maker
 from ..models import CallRecord, LedgerEntry
@@ -21,7 +22,7 @@ class FeedbackRateLimited(Exception):
 
 async def submit(
     *, org_id: int, user_email: str, category: FeedbackCategory, message: str,
-    call_ids: list[str], endpoint_id: str | None,
+    call_ids: list[str], endpoint_id: str | None, pinned_tags: dict | None = None,
 ) -> int:
     async with session_maker() as db:
         await ratestore.sweep(db, RATE_NAMESPACE)
@@ -34,16 +35,21 @@ async def submit(
         # unknown references never grant access or count as verified attribution.
         verified: set[str] = set()
         if call_ids:
+            # A pinned reporter verifies only against its own pin's rows, like every other read.
             verified.update((await db.execute(select(CallRecord.call_ref).where(
                 CallRecord.org_id == org_id, CallRecord.call_ref.in_(call_ids),
+                *pinned_tag_predicates(CallRecord.tags, pinned_tags),
             ))).scalars())
             verified.update((await db.execute(select(LedgerEntry.call_id).where(
                 LedgerEntry.org_id == org_id, LedgerEntry.call_id.in_(call_ids),
+                # Only the reserve entry carries `meta.tags`, so a pinned reporter matches on it.
+                *([LedgerEntry.kind == "reserve",
+                   *pinned_tag_predicates(LedgerEntry.meta["tags"], pinned_tags)] if pinned_tags else []),
             ))).scalars())
         row = feedback.add(
             db, org_id=org_id, user_email=user_email, category=category, message=message,
             call_ids=call_ids, verified_call_ids=[ref for ref in call_ids if ref in verified],
-            endpoint_id=endpoint_id,
+            endpoint_id=endpoint_id, tags=dict(pinned_tags) if pinned_tags else None,
         )
         await db.flush()
         feedback_id = row.id
@@ -61,12 +67,16 @@ class ReviewOwnTool(Exception):
 
 async def submit_review(
     *, org_id: int, user_email: str, call_id: str, usefulness: ReviewUsefulness,
-    reason: str | None = None, client: str = "",
+    reason: str | None = None, client: str = "", pinned_tags: dict | None = None,
 ) -> tuple[int, bool]:
-    """Return (review_id, inserted); attribution never comes from the caller."""
+    """Return (review_id, inserted); attribution never comes from the caller.
+
+    A pinned caller may only review a call carrying its pin: the same read scope as `/calls`, so
+    a foreign reference is a 404 here too rather than an oracle for another customer's calls."""
     async with session_maker() as db:
         record = (await db.execute(select(CallRecord).where(
             CallRecord.org_id == org_id, CallRecord.call_ref == call_id,
+            *pinned_tag_predicates(CallRecord.tags, pinned_tags),
         ).order_by(CallRecord.id.asc()).limit(1))).scalar_one_or_none()
         if record is None:
             # The ledger can verify provenance while audit is delayed, but cannot establish

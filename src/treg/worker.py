@@ -6,6 +6,7 @@
     treg-worker asynctasks settle [--limit 50]       # complete deferred metered-call holds
     treg-worker arena insights [--max-seconds 110]   # fold new audit rows into the Arena aggregate
     treg-worker catalog stats [--max-rows 500000]    # fold new audit rows into per-day endpoint stats
+    treg-worker jev xboost [--posts 60] [--min-likes 150]   # the /jev launch-radar demo: X posts <24h -> jev
 
 Not the light `treg` CLI: these need the server extra (DB, platform keys in the env) and make
 outbound calls to third parties, so they run as Render cron jobs with the server's env — never as
@@ -306,6 +307,26 @@ async def _catalog_stats(args) -> int:
     return 0
 
 
+async def _jev_xboost(args) -> int:
+    import httpx
+
+    from .infra.db import session_maker, verify_db
+    from .application import jev_xboost
+    from . import ratestore
+
+    await verify_db()
+    async with httpx.AsyncClient() as http:
+        run = await jev_xboost.run_daily(http, topics=args.topic or None, max_posts=args.posts, min_likes=args.min_likes)
+    async with session_maker() as db:
+        previous = await ratestore.kv_get(db, jev_xboost.KV_NS, jev_xboost.KV_KEY) or {}
+        run["manual"] = (previous.get("manual") or [])[:jev_xboost.MANUAL_CAP]   # visitors' verdicts survive the daily run
+        await ratestore.kv_put(db, jev_xboost.KV_NS, jev_xboost.KV_KEY, run, ttl_s=jev_xboost.KV_TTL_S)
+        await db.commit()
+    print(json.dumps({k: run[k] for k in ("ran_at", "posts_found", "seconds", "costs", "calls")}, sort_keys=True),
+          f"judged={len(run['posts'])}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="treg-worker", description=__doc__)
     sub = ap.add_subparsers(dest="group", required=True)
@@ -353,6 +374,13 @@ def main(argv: list[str] | None = None) -> int:
     stats.add_argument("--max-rows", type=int, default=500_000,
                        help="audit rows to consume in one run; the next run resumes from the cursor")
     stats.set_defaults(fn=_catalog_stats)
+    jev = sub.add_parser("jev", help="the /jev landing-page demos")
+    jevsub = jev.add_subparsers(dest="cmd", required=True)
+    xb = jevsub.add_parser("xboost", help="launch posts on X from the last 24h -> forensics -> jev; stores the run for /jev")
+    xb.add_argument("--topic", action="append", help="search phrase (repeatable); default is the AI-product set")
+    xb.add_argument("--posts", type=int, default=60, help="cap on posts judged, by views")
+    xb.add_argument("--min-likes", type=int, default=150)
+    xb.set_defaults(fn=_jev_xboost)
     args = ap.parse_args(argv)
     _need_server()
     return asyncio.run(args.fn(args))

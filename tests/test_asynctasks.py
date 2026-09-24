@@ -95,6 +95,19 @@ async def _submit(clients: AsyncClient, monkeypatch, document: dict):
     }})
 
 
+async def test_naive_datetime_bind_does_not_raise_under_sqlmodel_0_0_45(clients: AsyncClient):
+    """Regression test: SQLModel 0.0.45+ rejects naive datetime binds unless fields use NaiveDatetime.
+
+    The settle worker passes utcnow_naive() to WHERE next_check_at <= :now. Before the NaiveUTC
+    annotation fix, this raised:
+        ValueError: Datetime values must have timezone information.
+    """
+    now = utcnow_naive()
+    assert now.tzinfo is None, "sanity check: utcnow_naive() must return a naive datetime"
+    candidates = await task_app._due_candidates(limit=10, now=now)
+    assert isinstance(candidates, list)
+
+
 @pytest.mark.parametrize("legacy_cache", [False, True])
 async def test_generation_is_never_replayed_across_orgs(
     clients: AsyncClient, monkeypatch, replicate_platform, legacy_cache,
@@ -1076,11 +1089,13 @@ def test_terminal_classification_coerces_status_values_and_treats_none_as_progre
             "path": "task.status",
             "success": [2],
             "failure": ["3"],
+            "billed_failure": [4],
         },
     }
 
     assert asynctasks.classify_terminal(descriptor, {"task": {"status": "2"}}) == "success"
     assert asynctasks.classify_terminal(descriptor, {"task": {"status": 3}}) == "failure"
+    assert asynctasks.classify_terminal(descriptor, {"task": {"status": "4"}}) == "billed_failure"
     assert asynctasks.classify_terminal(descriptor, {"task": {"status": None}}) == "progress"
     assert asynctasks.classify_terminal(descriptor, {"task": {}}) == "progress"
 
@@ -1348,8 +1363,8 @@ async def test_cancellation_at_the_pending_row_commit_boundary_leaves_a_coherent
     hold it still owns, and the worker must then record the row as released, not settle it at zero."""
     real_defer = task_app.defer_submission
 
-    async def defer_then_cancel(mk, body, org_id):
-        await real_defer(mk, body, org_id)
+    async def defer_then_cancel(mk, body, org_id, *, tags=None):
+        await real_defer(mk, body, org_id, tags=tags)
         mk.call_id = mk.call_id or None
         raise asyncio.CancelledError()
 

@@ -180,4 +180,3 @@ Instagram direct Login plus optional Facebook Page tools is the reference implem
 ContactOut uses the same pasted-key path with `token` header auth and a free `/v1/stats` probe.
 Its garbage-token rejection and valid connection were verified live; its independent pools stay
 informational, with monitoring and top-ups managed by the designated account manager.
-See [ContactOut](../architecture/contactout.md).

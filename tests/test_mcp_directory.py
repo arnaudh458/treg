@@ -179,14 +179,16 @@ async def test_v2_no_slash_path_rejects_a_v1_token_with_the_v2_challenge(monkeyp
 async def test_v2_declares_exact_directory_contract():
     tools = {tool.name: tool for tool in await mcp.directory_mcp.list_tools()}
     assert list(tools) == [
-        "catalog_search", "catalog_get", "catalog_call_read", "catalog_call_write", "balance",
-        "catalog_request", "feedback", "review",
+        "catalog_search", "catalog_get", "catalog_call_read", "catalog_call_write",
+        "catalog_call_media", "resources_list", "balance", "catalog_request", "feedback", "review",
     ]
     expected_titles = {
         "catalog_search": "Search Treg Catalog",
         "catalog_get": "Get Catalog Endpoint",
         "catalog_call_read": "Call a Read Endpoint",
         "catalog_call_write": "Call a Write Endpoint",
+        "catalog_call_media": "Call an Audio Endpoint",
+        "resources_list": "List Team Resources",
         "balance": "Check Treg Balance",
         "catalog_request": "Request a Catalog Capability",
         "feedback": "Submit Feedback",
@@ -310,6 +312,8 @@ async def test_v2_serializes_the_scanner_facing_contract(clients):
         "catalog_get": "Get Catalog Endpoint",
         "catalog_call_read": "Call a Read Endpoint",
         "catalog_call_write": "Call a Write Endpoint",
+        "catalog_call_media": "Call an Audio Endpoint",
+        "resources_list": "List Team Resources",
         "balance": "Check Treg Balance",
         "catalog_request": "Request a Catalog Capability",
         "feedback": "Submit Feedback",

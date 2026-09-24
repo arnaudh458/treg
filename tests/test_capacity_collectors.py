@@ -14,6 +14,61 @@ import httpx
 import pytest
 
 
+async def test_fishaudio_balance_uses_workspace_wallet(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FISHAUDIO", "private-test-key")
+    monkeypatch.setenv("TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID", "workspace-test-id")
+    collectors.get_settings.cache_clear()
+    try:
+        def probe(request):
+            assert request.method == "GET"
+            assert request.url.path == "/wallet/self/api-credit"
+            assert request.url.params.get("team_id") == "workspace-test-id"
+            assert request.headers["authorization"] == "Bearer private-test-key"
+            return httpx.Response(200, json={"credit": "99.957540"})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+            row = await collectors.provider_balance("fishaudio", client)
+    finally:
+        collectors.get_settings.cache_clear()
+    assert row["value"] == 99.95754
+    assert row["unit"] == "USD"
+    capacity = policy.default_policy("fishaudio", has_key=True)
+    assert capacity.capacity_type == "cash"
+    assert capacity.funding_mode == "manual"
+    assert capacity.source == "api"
+    assert capacity.rate_limit is None
+
+
+async def test_fishaudio_balance_is_unknown_without_workspace_and_skips_request(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FISHAUDIO", "private-test-key")
+    monkeypatch.setenv("TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID", "")
+    collectors.get_settings.cache_clear()
+    try:
+        def probe(_request):
+            pytest.fail("missing workspace ID must not call Fish's unscoped personal wallet")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+            row = await collectors.provider_balance("fishaudio", client)
+    finally:
+        collectors.get_settings.cache_clear()
+    assert row["value"] is None
+    assert row["unit"] == "USD"
+    assert "not configured" in row["note"]
+
+
+@pytest.mark.parametrize("credit", [None, True, "not-a-number", "NaN", "Infinity", -1])
+async def test_fishaudio_balance_rejects_invalid_credit(monkeypatch, credit):
+    monkeypatch.setenv("TREG_PLATFORM_FISHAUDIO_WORKSPACE_ID", "workspace-test-id")
+    collectors.get_settings.cache_clear()
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda _request: httpx.Response(200, json={"credit": credit}))) as client:
+            row = await collectors._fishaudio(client, "test")
+    finally:
+        collectors.get_settings.cache_clear()
+    assert row["value"] is None
+
+
 async def test_openmart_balance_collector_and_policy():
     def probe(request):
         assert request.method == "GET"
@@ -36,6 +91,62 @@ async def test_openmart_balance_collector_and_policy():
     assert capacity.capacity_type == "credits"
     assert capacity.funding_mode == "subscription"
     assert capacity.rate_limit == {"limit": 15, "window_s": 1, "source": "docs"}
+
+
+async def test_tavily_capacity_uses_key_credit_remainder_and_conservative_rate():
+    def probe(request):
+        assert request.method == "GET"
+        assert request.url == "https://api.tavily.com/usage"
+        assert request.headers["authorization"] == "Bearer test"
+        return httpx.Response(200, json={
+            "key": {"usage": 125, "limit": 1000},
+            "account": {"plan_usage": 125, "plan_limit": 1000,
+                        "paygo_usage": 0, "paygo_limit": 5000},
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+        row = await collectors._tavily(client, "test")
+    assert row == {
+        "value": 875,
+        "unit": "API credits",
+        "note": "key usage 125 of 1000; account pools are informational",
+    }
+    capacity = policy.default_policy("tavily", has_key=True)
+    assert capacity.capacity_type == "credits"
+    assert capacity.funding_mode == "manual"
+    assert capacity.source == "api"
+    assert capacity.rate_limit == {"limit": 100, "window_s": 60, "source": "docs"}
+
+
+async def test_tavily_capacity_uses_account_pool_when_key_has_no_limit():
+    payload = {
+        "key": {"usage": 0, "limit": None},
+        "account": {"plan_usage": 12, "plan_limit": 1000,
+                    "paygo_usage": 3, "paygo_limit": 100},
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=payload)
+    )) as client:
+        row = await collectors._tavily(client, "test")
+    assert row == {
+        "value": 1085,
+        "unit": "API credits",
+        "note": "key has no finite cap; remaining plan, PAYGO account pool(s)",
+    }
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"key": {"usage": True, "limit": 1000}},
+    {"key": {"usage": -1, "limit": 1000}},
+    {"key": {"usage": 1, "limit": "1000"}},
+])
+async def test_tavily_capacity_rejects_uncertain_usage(payload):
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, json=payload)
+    )) as client:
+        row = await collectors._tavily(client, "test")
+    assert row["value"] is None
+    assert row["unit"] == "API credits"
 
 
 @pytest.mark.parametrize("value,expected", [(0, 0), (71, 71), ("5000", 5000)])
@@ -314,8 +425,74 @@ async def test_akta_collector_marks_enterprise_accounts():
 
 def test_no_balance_api_includes_expected_providers():
     """Verify the vendors that have no free balance API are documented."""
-    expected = {"aviato", "coresignal", "exa", "financialdatasets", "finnhub", "justoneapi", "limadata", "marketstack", "scrubby", "tiingo"}
+    expected = {
+        "adyntel", "aviato", "coresignal", "exa", "financialdatasets", "finnhub",
+        "justoneapi", "keenable", "limadata", "marketstack", "scrubby", "tiingo", "trestleiq",
+    }
     assert expected == set(collectors.NO_BALANCE_API.keys())
+
+
+async def test_keenable_capacity_is_portal_only_with_documented_rate_limit(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_KEENABLE", "test")
+    collectors.get_settings.cache_clear()
+    try:
+        row = await collectors.provider_balance("keenable")
+        assert row["value"] is None and row["no_api"] is True
+        capacity = policy.default_policy("keenable", has_key=True)
+        assert capacity.capacity_type == "requests"
+        assert capacity.funding_mode == "manual"
+        assert capacity.source == "manual"
+        assert capacity.rate_limit == {"limit": 10, "window_s": 1, "source": "docs"}
+    finally:
+        collectors.get_settings.cache_clear()
+
+
+async def test_olostep_balance_and_conservative_shared_key_rate(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_OLOSTEP", "test-key")
+    collectors.get_settings.cache_clear()
+    try:
+        def probe(request):
+            assert request.method == "GET"
+            assert request.url.path == "/user/credits/info"
+            assert request.headers["authorization"] == "Bearer test-key"
+            return httpx.Response(200, json={
+                "credits": 4321,
+                "active_subscription": {"display_name": "Free"},
+                "allow_usage": True,
+            })
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+            row = await collectors.provider_balance("olostep", client)
+        assert row == {
+            "provider": "olostep",
+            "value": 4321,
+            "unit": "credits",
+            "note": "plan Free; usage allowed",
+        }
+        capacity = policy.default_policy("olostep", has_key=True)
+        assert capacity.capacity_type == "credits"
+        assert capacity.funding_mode == "manual"
+        assert capacity.source == "api"
+        assert capacity.rate_limit == {"limit": 5, "window_s": 1, "source": "policy"}
+    finally:
+        collectors.get_settings.cache_clear()
+
+
+async def test_adyntel_capacity_is_dashboard_only_and_rate_limited(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_ADYNTEL", "PLATFORM-ADYNTEL")
+    collectors.get_settings.cache_clear()
+    try:
+        row = await collectors.provider_balance("adyntel")
+        assert row["no_api"] is True and row["value"] is None
+        assert "dashboard only" in row["note"]
+        capacity = policy.default_policy("adyntel", has_key=True)
+        assert capacity.capacity_type == "credits"
+        assert capacity.funding_mode == "manual"
+        assert capacity.auto_funding_enabled is False
+        assert capacity.source == "manual"
+        assert capacity.rate_limit == {"limit": 5, "window_s": 1, "source": "docs"}
+    finally:
+        collectors.get_settings.cache_clear()
 
 
 def test_limadata_policy_uses_auto_recharge_and_the_documented_rate():
@@ -325,6 +502,22 @@ def test_limadata_policy_uses_auto_recharge_and_the_documented_rate():
     assert row.auto_funding_enabled is True
     assert row.source == "manual"
     assert row.rate_limit == {"limit": 1, "window_s": 1, "source": "docs"}
+
+
+async def test_trestleiq_capacity_is_portal_only_with_manually_verified_auto_recharge(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_TRESTLEIQ", "PLATFORM-TRESTLEIQ")
+    collectors.get_settings.cache_clear()
+    try:
+        row = await collectors.provider_balance("trestleiq")
+        assert row["no_api"] is True and row["value"] is None
+        capacity = policy.default_policy("trestleiq", has_key=True)
+        assert capacity.capacity_type == "cash"
+        assert capacity.funding_mode == "auto_recharge"
+        assert capacity.auto_funding_enabled is True
+        assert capacity.source == "manual"
+        assert capacity.rate_limit == {"limit": 10, "window_s": 1, "source": "docs"}
+    finally:
+        collectors.get_settings.cache_clear()
 
 
 def test_implemented_collectors_are_registered_and_do_not_overlap_absent_list():

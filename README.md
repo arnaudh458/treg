@@ -69,6 +69,20 @@ treg balance                                     # exactly what that cost
 # (or `treg onboard` for the guided walkthrough)
 ```
 
+Fish Audio provides S2.1 Pro speech, public-voice discovery, and private voice cloning.
+Speech is binary stdout, so redirect it to a file. A discovered voice's `_id` or a team voice id is
+the TTS `reference_id`; voices created on treg's Fish account are durable team resources:
+
+```bash
+treg call fishaudio.tts.s2-1-pro --method POST --header model=s2.1-pro \
+  --data '{"text":"Hello from treg","format":"mp3"}' > speech.mp3
+treg call fishaudio.voices.discover --query self=false --query licensed=false --query language=en
+treg resources list --provider fishaudio --kind voice
+```
+
+With your own Fish key, requests remain an unrestricted, unmetered upstream relay and Fish owns the
+account boundary.
+
 Catalog tool inputs are described by `treg catalog get <id>`. Tools marked `strict_query` reject undeclared or repeated query parameters, unsupported values and request bodies.
 
 Your token identifies you on every call (`X-Treg-Token` header) and is the same for all tools.
@@ -292,6 +306,7 @@ scripts/dev-local.sh reset       # wipe the dev DB + CLI sandbox for a fresh sta
 Or run the server directly, without tmux:
 
 ```bash
+bash scripts/build-dashboard.sh # Node 22.12+ and npm; build the Dashboard
 uv sync                        # create the venv from uv.lock (pulls the server deps for dev)
 uv run python -m treg upgrade  # prepare schema + run idempotent release tasks without serving
 uv run python -m treg          # serve on 0.0.0.0:18790 (add --reload for dev)
@@ -314,6 +329,7 @@ Environment variables (prefix `TREG_`, read from `.env`):
 | Var                                       | Default                         | Purpose                                                                                                                                                                    |
 | ----------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TREG_DATABASE_URL`                       | `sqlite+aiosqlite:///./treg.db` | DB URL (SQLite for dev, Postgres in prod)                                                                                                                                  |
+| `TREG_READ_DATABASE_URL`                  | *(empty)*                       | Optional SQLite / PostgreSQL read datasource; empty reuses the primary. Requires callers to opt in; existing queries are unchanged. See [read datasource setup](docs/context/ops/deploy.md#optional-read-replica). |
 | `TREG_SECRET_KEY`                         | *(empty)*                       | Fernet key for secrets-at-rest; empty → an ephemeral key is minted (secrets won't survive a restart)                                                                       |
 | `TREG_PUBLIC_URL`                         | `https://treg.to`  | treg's public base, used to build the OAuth callback URI                                                                                                                   |
 | `TREG_SESSION_SECRET`                     | *(empty)*                       | signs the dashboard session cookie; falls back to `TREG_SECRET_KEY`. Set a real value in prod                                                                              |
@@ -424,3 +440,12 @@ redistribute the code to third parties as a competing hosted/managed registry se
 permission (`jason@superdesign.dev`). **Using the hosted treg.to API** inside your own product —
 with pass-through billing via `X-Treg-Meta` and `usage/by-tag` — is allowed without permission;
 that's calling our API, not redistributing our software.
+
+### Pinned customer read scopes
+
+For a restricted customer agent, `treg org agent-new bot --pin customer=cust_A` enforces attribution
+and scopes call/run history, archived results and shared-provider async ownership to that pin.
+Foreign or unattributed ids return 404; an unpinned operator keeps the org-wide view and shared
+balance. BYOK account access and public media URLs retain their existing permissions. See the
+[multi-tenancy contract](docs/context/architecture/multi-tenancy.md#caller-tags-and-pinned-read-scopes)
+for multiple pins, migration and replay behavior.
