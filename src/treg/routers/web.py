@@ -2320,7 +2320,7 @@ async def tools_provider(service: str, db: AsyncSession = Depends(get_session),
         f"<code>{_esc_html(base)}/mcp</code> (HTTP transport).</p></div>"
         f'<div class="card"><h4>CLI</h4><p><code>curl -fsSL {_esc_html(base)}/install.sh | sh</code></p></div>'
         '<div class="card"><h4>Plain HTTP</h4><p>LangChain, CrewAI or any code: '
-        "<code>/call/&lt;tool-id&gt;</code> with a Bearer token. No SDK.</p></div>"
+        "<code>/call/&lt;tool-id&gt;</code> with your token in the <code>X-Treg-Token</code> header. No SDK.</p></div>"
         "</div></div></section>")
 
     prompt = (f"Using treg, {task_lines[0]}. Show me the price first." if task_lines
@@ -2734,8 +2734,10 @@ endpoint is at <code>{BASE}/mcp</code>. An interactive console for everything be
 
 <h2>Endpoints</h2>
 <p>Authenticated requests carry the token in the <code>X-Treg-Token</code> header.
-<code>Authorization: Bearer &lt;token&gt;</code> is accepted only by the MCP endpoint; the REST
-routes below ignore it and answer 401. The catalog routes are open and need no token.</p>
+Only the MCP endpoint accepts <code>Authorization: Bearer &lt;token&gt;</code>. The REST routes never
+authenticate with it (a request carrying only Bearer gets <code>401 not authenticated</code>), and on
+<code>/call/</code> it is forwarded to the provider like any other header, so never put your treg token
+there. The catalog routes are open and need no token.</p>
 """
 
 

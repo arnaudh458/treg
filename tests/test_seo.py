@@ -324,15 +324,22 @@ async def test_docs_does_not_advertise_the_admin_api(clients: AsyncClient):
 
 
 async def test_docs_teaches_the_header_the_rest_api_reads(clients: AsyncClient):
-    """REST reads only `X-Treg-Token`; a reader who copied the page's old Bearer curl got a 401."""
+    """REST reads only `X-Treg-Token`; a reader who copied the page's old Bearer curl got a 401.
+
+    The Bearer->401 assertion pins today's behavior so the copy stays true, not a security
+    contract: a change that makes REST accept Bearer must update these pages with it."""
     text = (await clients.get("/docs")).text
     assert 'curl -H "X-Treg-Token: $TREG_TOKEN"' in text
     assert 'curl -H "Authorization: Bearer' not in text
-    # The page's own example must actually authenticate.
-    token = clients.headers["X-Treg-Token"]
-    clients.headers.pop("X-Treg-Token")
-    assert (await clients.get("/tools", headers={"X-Treg-Token": token})).status_code == 200
-    assert (await clients.get("/tools", headers={"Authorization": f"Bearer {token}"})).status_code == 401
+    assert "Bearer token auth" not in text
+    assert "with a Bearer token" not in (await clients.get("/tools/moz")).text
+    # The page's own example path authenticates with the header it teaches, and not with Bearer.
+    token = clients.headers.pop("X-Treg-Token")
+    clients.cookies.clear()
+    example = "/call/moz.web.url.metrics"
+    assert (await clients.get(example, headers={"X-Treg-Token": token})).status_code != 401
+    bearer = await clients.get(example, headers={"Authorization": f"Bearer {token}"})
+    assert bearer.status_code == 401 and bearer.json()["detail"] == "not authenticated"
 
 
 async def test_widening_head_did_not_leak_into_the_public_schema(clients: AsyncClient):

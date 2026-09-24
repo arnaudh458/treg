@@ -73,7 +73,8 @@ Point your client at `{BASE}/mcp/` with `Authorization: Bearer <token>`. Tools: 
 
 Tokens come in two kinds and the difference will cost you an afternoon:
 
-- **Org-scoped** (`treg org agent-new <name>`) — belongs to one team, works as a bare bearer.
+- **Org-scoped** (`treg org agent-new <name>`) — belongs to one team, works on its own
+  (as `X-Treg-Token` on REST, or `Authorization: Bearer` for MCP).
   **Use this in a product.**
 - **Identity** (`treg login`) — belongs to a *person*, who may be in several teams. Recent versions
   pin it to the active team so it also works bare; an older or unpinned one answers
@@ -98,7 +99,7 @@ A malformed bag is a `422` **before** anything is relayed, so it costs nothing.
 
 Do **not** expose the tag as an argument your LLM fills in. A model will omit it somewhere in a long
 chain, and a number you cannot reconcile is worse than no number. Your backend already knows which
-user a request belongs to and already sets the `Authorization` header — set the tag at that same call
+user a request belongs to and already sets the `X-Treg-Token` header — set the tag at that same call
 site:
 
 ```ts
