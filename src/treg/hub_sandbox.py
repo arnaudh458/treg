@@ -12,6 +12,7 @@ Protocol, JSON lines, one per message:
   parent → child   {"op": "result", "id": 1, "status": 200, "headers": {...}, "json": ..., "text": "..."}
                    {"op": "refused", "id": 1, "error": "..."}      (the script sees a thrown Error)
   child  → parent  {"op": "log", "text": "..."}
+  child  → parent  {"op": "charge", "usd": 0.03, "label": "vendor-b"}   (an own-key step's cost, billed to the caller)
   child  → parent  {"op": "done", "output": {...}} | {"op": "error", "kind": "...", "message": "..."}
 
 `ctx.call` returns a promise and does NOT block the engine: the child sends the call, keeps
@@ -78,6 +79,9 @@ globalThis.ctx = {
   },
   csv: __csv,
   log: function (text) { __bridge_log(String(text)); },
+  // ctx.charge(usd, label): bill the caller for an own-key step whose cost treg cannot see (the
+  // maker's vendor). Capped per charge by pricing.max_charge_usd; the parent refuses more.
+  charge: function (usd, label) { __bridge_charge(JSON.stringify([Number(usd), String(label === undefined ? "" : label)])); },
 };
 """
 
@@ -133,8 +137,13 @@ def main() -> int:
             logs += 1
             _emit({"op": "log", "text": text[:MAX_LOG_CHARS]})
 
+    def bridge_charge(packed: str) -> None:
+        usd, label = json.loads(packed)
+        _emit({"op": "charge", "usd": usd, "label": str(label)[:80]})
+
     ctx.add_callable("__bridge_send", bridge_send)
     ctx.add_callable("__bridge_log", bridge_log)
+    ctx.add_callable("__bridge_charge", bridge_charge)
     ctx.set("__inputs_json", json.dumps(start.get("inputs", {}), ensure_ascii=False))
     ctx.set("__data_json", json.dumps(start.get("data"), ensure_ascii=False))   # the uploaded CSV's rows, or null
     try:

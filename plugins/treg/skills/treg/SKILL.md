@@ -316,7 +316,7 @@ treg tool add supabase --base-url https://<ref>.supabase.co \
 ```
 
 **What a script gets — the whole surface:** `ctx.inputs` (checked against the manifest),
-`ctx.call(target, {method, query, body, headers, timeout_s})` → `{status, headers, json, text, timed_out, cost_usd}` (calls in one `Promise.all` run four at once),
+`ctx.call(target, {method, query, body, headers, timeout_s})` → `{status, headers, json, text, timed_out, cost_usd}` (calls in one `Promise.all` run four at once), `ctx.charge(usd, label)` (bill the caller for an own-key step whose cost treg cannot see: your vendor; needs `pricing.max_charge_usd`, the most all charges may total in one run, shown to the caller),
 `ctx.csv(text)` → rows keyed by the header, `ctx.data` → the rows of the `data.csv` uploaded with
 the tool (a fifth file, ≤ 50 MB, read-only; replace it and publish again), and `ctx.log(text)`.
 No network, no files, no `require`; `ctx.call` is the only road out, and `target` must be in the

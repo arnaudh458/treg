@@ -30,6 +30,7 @@ from sqlalchemy import select
 from ... import audit
 from ...domain.catalog import store as catalog_store
 from ...domain.hub import graph as hub_graph
+from . import sandbox
 from ...domain.hub import manifest as hub_manifest
 from ...domain.hub import refs
 from ...infra.db import session_maker
@@ -174,6 +175,11 @@ async def run_hub_tool(
     own_tools = {u for u in manifest["uses"] if "." not in u}
     pricing = hub_manifest.pricing_micro(manifest)
     reserve_micro = _worst_case(pricing, inputs, ceiling)
+    # A script may bill own-key steps through ctx.charge; `max_charge_micro` is the most ALL its
+    # charges may total in one run. That amount is held with the fee, on the same hold, and the
+    # caller sees `max_charge_usd` in the contract before running. Settled at what was charged.
+    charge_cap = int((pricing or {}).get("max_charge_micro") or 0)
+    reserve_micro += charge_cap
     price_held = await _reserve_price(parent, tool, run_id, reserve_micro)
     if price_held > ceiling:
         await _close_price(tool, run_id, price_held, success=False, reason="hub_run_max_cost")
@@ -535,6 +541,9 @@ def _public_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
     round 5 q7). The full trace stays on the run row for the maker."""
     out = []
     for e in trace:
+        if e.get("outcome") == "charged":
+            out.append(dict(e))         # a ctx.charge line: the label is written for the caller
+            continue
         call = str(e.get("call", ""))
         kind = "a catalog tool" if "." in call.split("/", 1)[0] else "the maker's own tool"
         out.append({k: v for k, v in e.items() if k not in ("call", "error")} | {"call": kind})
@@ -690,7 +699,6 @@ def _json(value, status: int, headers: dict[str, str]) -> UpstreamResponse:
 async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_tools,
                            upstream_client, execute_child, started, audit_client, price_held=0,
                            pricing=None):
-    from . import sandbox
 
     manifest = tool.manifest
     run_id = parent.call_ref
@@ -809,9 +817,12 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
                 "cost_usd": charged / 1_000_000}
 
     data_rows = _csv_rows(tool.data) if getattr(tool, "data", None) else None
+    charges: list[dict[str, Any]] = []
+    charge_cap = int((pricing or {}).get("max_charge_micro") or 0)
     try:
         output = await sandbox.run_script(tool.script or "", inputs, wall_s=manifest["limits"]["wall_s"],
-                                          execute=execute, log=log, data=data_rows)
+                                          execute=execute, log=log, data=data_rows,
+                                          charges=charges, max_charge_micro=charge_cap)
     except sandbox.SandboxError as exc:
         ms_total = int((time.monotonic() - started) * 1000)
         await _close_price(tool, run_id, price_held, success=False, reason="hub_script_failed")
@@ -834,8 +845,16 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
                       masked(manifest["inputs"], inputs), trace, error=detail, log=log)
         _audit_parent(parent, tool, 424, spent, audit_client)
         raise ResolutionFailed("hub_run_failed", status_code=424, detail=_public_detail(detail))
+    # ctx.charge lines: each one a trace entry the caller reads (label, amount, whose step), and the
+    # sum joins the maker's price on the same hold. A charge is the maker's word, bounded by the cap
+    # the caller saw; a run that failed above never reaches here, so its charges are released.
+    charged_micro = sum(c["micro"] for c in charges)
+    for i, c in enumerate(charges):
+        trace.append({"wave": counted + i, "name": f"charge{i + 1}", "call": c["label"] or "own-key step",
+                      "outcome": "charged", "status": None, "ms": 0, "cost_micro": c["micro"], "key": "team"})
     try:
         price_now = _final_price(pricing or {"mode": "per_call", "price_micro": 0}, output, spent, price_held)
+        price_now = min(price_now + charged_micro, price_held) if price_held > 0 else price_now + charged_micro
     except _PriceInvalid as exc:
         await _close_price(tool, run_id, price_held, success=False, reason="hub_units_invalid")
         detail = {"error": "hub_units_invalid", "run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}",
@@ -845,10 +864,11 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
                       masked(manifest["inputs"], inputs), trace, error=detail, log=log)
         _audit_parent(parent, tool, 424, spent, audit_client)
         raise ResolutionFailed("hub_run_failed", status_code=424, detail=_public_detail(detail))
-    actual = None if (pricing or {}).get("mode", "per_call") == "per_call" else price_now
+    actual = None if ((pricing or {}).get("mode", "per_call") == "per_call" and not charges) else price_now
     earned = await _close_price(tool, run_id, price_held, success=True, actual=actual)
     body_out = {"run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}", "output": output,
                 "usage": {"cost_micro": spent + earned, "steps_micro": spent, "price_micro": earned,
+                          **({"charged_micro": charged_micro} if charges else {}),
                           "steps": counted, "ms": ms_total}, "trace": _public_trace(trace), "log": log}
     await _record(tool, parent, run_id, "ok", counted, spent, ms_total,
                   masked(manifest["inputs"], inputs), trace, log=log, price=earned, output=output)

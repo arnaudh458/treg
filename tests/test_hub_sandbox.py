@@ -215,3 +215,39 @@ async def test_a_call_with_its_own_timeout_answers_timed_out_instead_of_ending_t
         "}",
         {}, wall_s=10, execute=execute, log=[])
     assert out == {"a_timed_out": True, "a_status": 0, "b_status": 200, "b_timed_out": False}
+
+
+# ---------------------------------------------------------------------------------------------
+# ctx.charge: a script bills the caller for an own-key step (owner + Jason, 2026-09-24)
+
+async def test_ctx_charge_lines_reach_the_parent_and_zero_is_dropped():
+    charges: list = []
+    out = await run_script(
+        "export default async function run(ctx) {"
+        "  ctx.charge(0.03, 'vendor-b hit'); ctx.charge(0, 'free miss'); ctx.charge(0.001);"
+        "  return { ok: 1 };"
+        "}",
+        {}, wall_s=10, execute=None, log=[], charges=charges, max_charge_micro=50_000)
+    assert out == {"ok": 1}
+    assert charges == [{"micro": 30_000, "label": "vendor-b hit"}, {"micro": 1_000, "label": ""}]
+
+
+@pytest.mark.parametrize("expr, rule", [
+    ("ctx.charge(0.6, 'too much')", "past pricing.max_charge_usd"),
+    ("ctx.charge(0.3, 'a'); ctx.charge(0.3, 'b')", "past pricing.max_charge_usd"),
+    ("ctx.charge('abc', 'x')", "a number of dollars"),
+    ("ctx.charge(-1, 'x')", "a number of dollars"),
+    ("for (let i = 0; i < 21; i++) ctx.charge(0.01, 'x')", "cap of 20 charges"),
+])
+async def test_a_bad_charge_is_refused_and_stops_the_run(expr, rule):
+    with pytest.raises(SandboxError) as e:
+        await run_script("export default async function run(ctx) { " + expr + "; return { ok: 1 }; }",
+                         {}, wall_s=10, execute=None, log=[], charges=[], max_charge_micro=500_000)
+    assert e.value.kind == "refused" and rule in e.value.message
+
+
+async def test_ctx_charge_without_a_declared_cap_is_refused():
+    with pytest.raises(SandboxError) as e:
+        await run_script("export default async function run(ctx) { ctx.charge(0.01, 'x'); return { ok: 1 }; }",
+                         {}, wall_s=10, execute=None, log=[])
+    assert e.value.kind == "refused" and "max_charge_usd" in e.value.message

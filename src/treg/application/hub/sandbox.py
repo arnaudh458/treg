@@ -33,6 +33,7 @@ except ImportError:  # pragma: no cover — Windows
 MEMORY_MB = 64                 # the engine's own heap cap
 PROCESS_RSS_MB = 512           # the whole child process: interpreter + engine + buffers
 MAX_CALLS = 20
+MAX_CHARGES = 20                   # ctx.charge lines a run may add (one per own-key step, at most)
 MAX_PARALLEL = 4                   # ctx.calls in flight at once, the JSON road's width
 MAX_LOG_LINES = 50
 MAX_LOG_CHARS = 2000
@@ -102,6 +103,7 @@ def _kill_group(pgid: int) -> None:
 async def run_script(
     script: str, inputs: dict[str, Any], *, wall_s: int, execute: CallExecutor,
     log: list[str], data: list[dict[str, Any]] | None = None,
+    charges: list[dict[str, Any]] | None = None, max_charge_micro: int = 0,
 ) -> dict[str, Any]:
     """Run one script to its output. `execute` runs each ctx.call; `log` receives the script's
     lines. Raises SandboxError when the run cannot produce an output."""
@@ -205,6 +207,22 @@ async def run_script(
             if op == "log":
                 if len(log) < MAX_LOG_LINES:
                     log.append(str(msg.get("text", ""))[:MAX_LOG_CHARS])
+            elif op == "charge":
+                # ctx.charge: the script bills the caller for an own-key step. Refused, and the run
+                # stops, when the manifest declares no cap, the amount passes the cap, or the run has
+                # already charged 20 times: every line the caller pays is bounded by what they saw.
+                usd = msg.get("usd")
+                if charges is None or max_charge_micro <= 0:
+                    raise SandboxError("refused", "ctx.charge needs `pricing.max_charge_usd` in the manifest")
+                if not isinstance(usd, (int, float)) or isinstance(usd, bool) or not (usd >= 0) or usd != usd:
+                    raise SandboxError("refused", "ctx.charge: the amount must be a number of dollars, 0 or more")
+                micro = int(round(float(usd) * 1_000_000))
+                if sum(c["micro"] for c in charges) + micro > max_charge_micro:
+                    raise SandboxError("refused", f"ctx.charge: {usd} would take this run's charges past pricing.max_charge_usd ({max_charge_micro / 1_000_000})")
+                if len(charges) >= MAX_CHARGES:
+                    raise SandboxError("refused", f"the run passed its cap of {MAX_CHARGES} charges")
+                if micro > 0:
+                    charges.append({"micro": micro, "label": str(msg.get("label", ""))[:80]})
             elif op == "call":
                 calls += 1
                 if calls > MAX_CALLS:

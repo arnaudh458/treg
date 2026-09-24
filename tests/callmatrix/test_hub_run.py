@@ -768,7 +768,9 @@ async def test_script_road_refusals_are_clean(
     cases = {
         "dotdot": ('ctx.call("mine2/../../admin")', "`..`"),
         "bad header name": ('ctx.call("mine2/x", {headers: {"名": "1"}})', "ASCII token"),
-        "opts not an object": ('__bridge_call(JSON.stringify(["mine2/x", "abc"]))', "must be an object"),
+        # the raw bridge, by its name since calls went parallel: send returns an id, the reply
+        # settles the promise, and a refused reply throws where the run awaits it
+        "opts not an object": ('new Promise((ok, no) => { const id = __bridge_send(JSON.stringify(["mine2/x", "abc"])); globalThis.__pending[id] = {resolve: ok, reject: no}; })', "must be an object"),
         "line over 8 MiB": ('ctx.call("mine2/x", {body: {x: "a".repeat(9 << 20)}})', "over 8 MiB"),
     }
     for name, (expr, rule) in cases.items():

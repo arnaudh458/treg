@@ -170,7 +170,7 @@ server extra) has no network, no file system, no `require`, no `process`, no tim
 heap is capped at 64 MB. The whole surface a script gets: `ctx.inputs`, `ctx.call(target,
 {method, query, body, headers})` → `{status, headers, json, text, truncated, cost_usd}` (the x-treg-*
 headers are removed; `cost_usd` is what that call charged, so a script can keep its own budget and
-stop before the ceiling: a run that passes it is stopped by treg and returns nothing), `ctx.csv(text)` → rows
+stop before the ceiling: a run that passes it is stopped by treg and returns nothing), `ctx.charge(usd, label)` → nothing (bills the caller for an own-key step, below), `ctx.csv(text)` → rows
 keyed by the header (RFC 4180), `ctx.data` → the rows of `data.csv` (≤ 5 MB, parsed once per run in the
 parent), `ctx.log(text)` (50 lines × 2 KB). `ctx.call` crosses to the parent as one JSON line
 over stdin/stdout; the parent enforces `uses` per call (a call outside the list is refused and
@@ -194,6 +194,20 @@ child releases its hold, and the trace records the step as `timeout`. Added 2026
 visibility tool: five answer engines at 30-47 s each could not fit 120 s one after another, and one
 engine that never answers must not cost the other four. **A security
 review of the sandbox is scheduled as its own pass before release** (the owner's note).
+
+## ctx.charge: an own-key step's cost, billed to the caller
+
+An own-key step costs the caller nothing (rule 1) and the MAKER real money at a vendor treg cannot
+see; a waterfall over four such vendors costs the maker $0.001 one run and $0.50 the next, and no
+manifest table can say which branch ran. So the script says it: `ctx.charge(usd, label)` after the
+step, once it has seen the answer (a vendor that bills only on a hit is charged only on a hit). The
+manifest declares `pricing.max_charge_usd`, the most all charges may total in ONE run, allowed with
+every mode and only on a script tool; without it `ctx.charge` is refused and the run stops. The
+runner holds that cap with the fee on the same `{run}:price` hold, the parent refuses a charge that
+would pass it (and a 21st charge), each charge is a `charged` line in the trace with the maker's
+label, `usage.charged_micro` is their sum, and the price settled to the maker is fee + charges. A run
+that fails releases them with the fee. The price label reads "... + own-key steps up to $X per run"
+so the caller sees the cap before running (owner + Jason, 2026-09-24).
 
 ## The maker's road (`routers/hub.py`, `application/hub/__init__.py`)
 

@@ -122,7 +122,7 @@ def _no_price(m):
 
 
 _MICRO = {"price_micro": 0, "per_result_micro": 0, "percent_micro": 0, "max_price_micro": 0,
-          "results_from": None, "results_max": 0}
+          "results_from": None, "results_max": 0, "max_charge_micro": 0}
 
 
 def test_pricing_per_call_block_normalizes():
@@ -140,7 +140,7 @@ def test_pricing_per_result_block():
     v = validate(m, catalog_ids=CATALOG, own_tools=OWN)
     assert v.price_micro == 0
     assert v.pricing == {**_MICRO, "mode": "per_result", "per_result_micro": 2_000,
-                         "results_from": "limit", "results_max": 100}
+                         "results_from": "limit", "results_max": 100, "max_charge_micro": 0}
     assert v.manifest["pricing"] == {"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}
 
 
@@ -1215,3 +1215,80 @@ async def test_a_team_outside_the_list_sees_the_hub_as_off_but_can_read_a_contra
     finally:
         monkeypatch.delenv("TREG_HUB_TEAMS", raising=False)
         get_settings.cache_clear()
+
+
+# ---------------------------------------------------------------------------------------------
+# ctx.charge end to end: the caller pays fee + charges, the maker earns both, on one hold
+
+async def _publish_charging_script(clients: AsyncClient, pricing: dict, script: str) -> str:
+    m = _script_manifest(name="own-waterfall", uses=[], output={"fields": ["email", "results"]}, pricing=pricing)
+    r = await clients.post("/hub/tools", json={"manifest": m, "script": script, "readme": "x",
+                                               "check": {"inputs": {}, "fields": ["email"]}})
+    assert r.status_code == 201, r.text
+    tool_id = r.json()["tool_id"]
+    from sqlalchemy import update
+    from treg.infra.db import session_maker
+    from treg.models import HubTool
+    async with session_maker() as s:
+        await s.execute(update(HubTool).where(HubTool.tool_id == tool_id).values(status="live"))
+        await s.commit()
+    return tool_id
+
+
+async def test_max_charge_usd_needs_a_script_and_shows_in_the_public_pricing(clients: AsyncClient, hub_on):
+    await _own_supabase(clients)
+    m = _steps_manifest(pricing={"mode": "per_call", "price_usd": 0.01, "max_charge_usd": 0.5})
+    m.pop("price_usd", None)
+    r = await clients.post("/hub/tools", json={"manifest": m, "check": CHECK, "readme": "x"})
+    assert r.status_code == 422 and "max_charge_usd" in r.text and "script" in r.text
+    tool_id = await _publish_charging_script(
+        clients, {"mode": "per_call", "price_usd": 0.01, "max_charge_usd": 0.5},
+        "export default async function run(ctx) { return { email: null, results: 0 }; }")
+    view = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()
+    assert "own-key steps up to $0.5 per run" in view["endpoint"]["price_line"], "the caller must see the cap before running"
+
+
+async def test_charges_are_billed_to_the_caller_and_earned_by_the_maker_on_top_of_the_fee(
+    clients: AsyncClient, hub_on,
+):
+    """Jason's waterfall over four vendors treg does not carry: the script reports what each step
+    cost at the maker's vendor, the caller pays those lines plus the fee, the maker earns all of it.
+    Here: a per_call fee of $0.01, one charge of $0.03 (vendor-b hit) and one of $0.001 (vendor-a),
+    a zero charge for a miss that is dropped: the caller pays $0.041, the maker earns $0.041."""
+    tool_id = await _publish_charging_script(
+        clients, {"mode": "per_call", "price_usd": 0.01, "max_charge_usd": 0.05},
+        "export default async function run(ctx) {"
+        "  ctx.charge(0.001, 'vendor-a');"
+        "  ctx.charge(0, 'vendor-b miss');"
+        "  ctx.charge(0.03, 'vendor-c hit');"
+        "  return { email: 'x@y.z', results: 1 };"
+        "}")
+    maker_org = (await clients.get("/orgs")).json()[0]["org_id"]
+    maker_before = (await clients.get(f"/orgs/{maker_org}/balance")).json()["balance_micro"]
+    buyer = await funded_user(clients, "waterfall-buyer@example.com")
+    buyer_before = (await clients.get(f"/orgs/{buyer['org_id']}/balance", headers={"X-Treg-Token": buyer["token"]})).json()["balance_micro"]
+
+    run = await clients.post(f"/call/{tool_id}", json={}, headers={"X-Treg-Token": buyer["token"]})
+    assert run.status_code == 200, run.text
+    u = run.json()["usage"]
+    assert u["charged_micro"] == 31_000 and u["price_micro"] == 41_000 and u["steps_micro"] == 0
+    assert u["cost_micro"] == 41_000
+    lines = [t for t in run.json()["trace"] if t["outcome"] == "charged"]
+    assert [(t["call"], t["cost_micro"]) for t in lines] == [("vendor-a", 1_000), ("vendor-c hit", 30_000)]
+
+    buyer_after = (await clients.get(f"/orgs/{buyer['org_id']}/balance", headers={"X-Treg-Token": buyer["token"]})).json()["balance_micro"]
+    maker_after = (await clients.get(f"/orgs/{maker_org}/balance")).json()["balance_micro"]
+    assert buyer_before - buyer_after == 41_000
+    assert maker_after - maker_before == 41_000
+
+
+async def test_a_charge_over_the_cap_fails_the_run_and_the_caller_pays_nothing(clients: AsyncClient, hub_on):
+    tool_id = await _publish_charging_script(
+        clients, {"mode": "per_call", "price_usd": 0.01, "max_charge_usd": 0.02},
+        "export default async function run(ctx) { ctx.charge(0.5, 'vendor-d'); return { email: 'x@y.z', results: 1 }; }")
+    buyer = await funded_user(clients, "capped-buyer@example.com")
+    before = (await clients.get(f"/orgs/{buyer['org_id']}/balance", headers={"X-Treg-Token": buyer["token"]})).json()["balance_micro"]
+    run = await clients.post(f"/call/{tool_id}", json={}, headers={"X-Treg-Token": buyer["token"]})
+    assert run.status_code == 424 and "max_charge_usd" in run.text
+    after = (await clients.get(f"/orgs/{buyer['org_id']}/balance", headers={"X-Treg-Token": buyer["token"]})).json()["balance_micro"]
+    assert before == after
