@@ -28,6 +28,7 @@ import admin from './admin.js'
 import snippets from './snippets.js'
 import tryTool from './tryTool.js'
 import lifecycle from './lifecycle.js'
+import hub from './hub.js'
 import billingComputed from './billingComputed.js'
 import catalogComputed from './catalogComputed.js'
 import sessionComputed from './sessionComputed.js'
@@ -37,7 +38,7 @@ import detailsComputed from './detailsComputed.js'
 export default {
  data,
  computed: {...resourcesComputed, ...billingComputed, ...catalogComputed, ...sessionComputed, ...agentsComputed, ...onboardingComputed, ...detailsComputed},
- methods: {...resources, setElement(name, element) { this.elements[name] = element }, ...session, ...team, ...keys, ...agents, ...projects, ...governance, ...activity, ...billing, ...referrals, ...secrets, ...tools, ...skills, ...format, ...onboarding, ...analytics, ...help, ...connections, ...sharing, ...navigation, ...catalog, ...details, ...admin, ...snippets, ...tryTool, ...lifecycle},
+ methods: {...resources, setElement(name, element) { this.elements[name] = element }, ...session, ...team, ...keys, ...agents, ...projects, ...governance, ...activity, ...billing, ...referrals, ...secrets, ...tools, ...skills, ...format, ...onboarding, ...analytics, ...help, ...connections, ...sharing, ...navigation, ...catalog, ...details, ...admin, ...snippets, ...tryTool, ...lifecycle, ...hub},
  watch:{
     // a11y (WCAG 2.4.3): when a dialog/drawer opens, move focus INTO it (was left on the trigger)
     newTool(v){ this.focusOverlay(v); }, newSkill(v){ this.focusOverlay(v); }, newOrg(v){ this.focusOverlay(v); },

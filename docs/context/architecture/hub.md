@@ -18,6 +18,9 @@ sources:
   - src/treg/application/call/service.py
   - src/treg/domain/money/__init__.py
   - src/treg/mcp.py
+  - frontend/src/state/hub.js
+  - frontend/src/pages/HubPage.vue
+  - frontend/src/pages/HubRunPage.vue
   - src/treg/cli.py
   - src/treg/worker.py
   - src/treg/models.py
@@ -304,10 +307,13 @@ set by publishing a version with a `pricing` block.
   the check trace as shape only (never what each step called);
   "made of N tools (names and keys hidden)"; reliability over 30 days; older versions still
   callable; readable without sign-in; `noindex`, not in the sitemap.
-- **The dashboard** (`web/index.html`): a Hub view for the maker (the list; a detail with
-  Overview, Versions, Price, Earnings, Runs & log, Health; copy call line, copy share URL, retire)
-  and the run page `/app/runs/<run_id>`, opened on load in both sign-in modes. Files are
-  read-only in the dashboard: a new version comes from the terminal or the agent.
+- **The dashboard** (`frontend/`: `state/hub.js`, `pages/HubPage.vue`, `pages/HubRunPage.vue`):
+  a Hub view for the maker (the list; a detail with Overview, Versions, Price, Listing, Earnings,
+  Runs & log, Health; copy call line, copy share URL, retire) and the run page
+  `/app/runs/<run_id>`, opened on load in both sign-in modes. The Hub entry shows when
+  `/hub/tools/mine` answers for the active team, and is probed again on a team switch. Files are
+  read-only in the dashboard: a new version comes from the terminal or the agent. The frozen
+  legacy dashboard carries the same view until its retirement.
 - **The CLI:** `treg hub init` scaffolds a `pricing` block (`per_call`, 0); `treg hub ls` shows the price
   label; `treg hub earnings` prints the average price per successful run; `treg hub list | unlist`
   and `treg hub log --public on|off` flip the two distribution switches (`HubTool.listed`,

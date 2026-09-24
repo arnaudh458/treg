@@ -14,6 +14,8 @@ import AdminPage from './pages/AdminPage.vue'
 import GettingStartedPage from './pages/GettingStartedPage.vue'
 import ReferralsPage from './pages/ReferralsPage.vue'
 import HelpPage from './pages/HelpPage.vue'
+import HubPage from './pages/HubPage.vue'
+import HubRunPage from './pages/HubRunPage.vue'
 import SignedOutPage from './components/SignedOutPage.vue'
 import BrandMark from './components/BrandMark.vue'
 import PublicNavigation from './components/PublicNavigation.vue'
@@ -36,7 +38,7 @@ import RunToolDialog from './dialogs/RunToolDialog.vue'
 import CallDetailsDialog from './dialogs/CallDetailsDialog.vue'
 import TryEndpointDialog from './dialogs/TryEndpointDialog.vue'
 import SignInDialog from './components/SignInDialog.vue'
-export default { ...controller, components: { ...controller.components, TeamResourcesPage, FishVoiceDialog, CatalogPage, ProviderPage, PlatformPage, ToolsPage, DetailPage, SecretsPage, TeamPage, ActivityPage, AdminPage, GettingStartedPage, ReferralsPage, HelpPage, SignedOutPage, BrandMark, PublicNavigation, DashboardNavigation, ConnectTokenDialog, TopUpDialog, AgentGuideDialog, ConnectionMethodDialog, ResourcePickerDialog, ExtraCredentialDialog, EditToolDialog, AcceptInvitesDialog, WelcomeDialog, CopyToolDialog, ImportSkillDialog, RequestToolDialog, ShareDialog, RecipeDialog, RunToolDialog, CallDetailsDialog, TryEndpointDialog, SignInDialog } }
+export default { ...controller, components: { ...controller.components, TeamResourcesPage, FishVoiceDialog, CatalogPage, ProviderPage, PlatformPage, ToolsPage, DetailPage, SecretsPage, TeamPage, ActivityPage, AdminPage, GettingStartedPage, ReferralsPage, HelpPage, HubPage, HubRunPage, SignedOutPage, BrandMark, PublicNavigation, DashboardNavigation, ConnectTokenDialog, TopUpDialog, AgentGuideDialog, ConnectionMethodDialog, ResourcePickerDialog, ExtraCredentialDialog, EditToolDialog, AcceptInvitesDialog, WelcomeDialog, CopyToolDialog, ImportSkillDialog, RequestToolDialog, ShareDialog, RecipeDialog, RunToolDialog, CallDetailsDialog, TryEndpointDialog, SignInDialog } }
 </script>
 
 <template>
@@ -110,6 +112,8 @@ export default { ...controller, components: { ...controller.components, TeamReso
         <!-- REFERRALS — a person's link and everyone who used it. A top-level view (never nested):
              a view inside a view renders nowhere, and the nav button would look dead. -->
         <ReferralsPage v-if="view==='referrals'" />
+        <HubPage v-if="view==='hub'" />
+        <HubRunPage v-if="view==='run'" />
 
         <!-- HELP -->
         <HelpPage v-if="view==='help'" />

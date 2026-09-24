@@ -3,6 +3,10 @@ import { LS } from './constants.js'
 export default function data(){
     let cfg={active:null,orgs:{}}; try{ cfg=JSON.parse(localStorage.getItem(LS))||cfg; }catch(e){}
     return {
+      // the tool hub: hub.tools is every version of the team's tools (newest first); hub.tool the
+      // opened one; hub.tab overview|versions|price|listing|earnings|runs|health; run the opened run
+      hubOn:false, hub:{loading:false, tools:[], tool:null, tab:'overview', earnings:null, health:null, err:'', note:'', confirmRetire:null, runOpen:null},
+      run:{loading:false, data:null, err:''},
       elements: createElements(),
       bootReady: false, bootFailed: false,
       theme: localStorage.getItem('treg-theme')||'light',

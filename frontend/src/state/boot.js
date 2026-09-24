@@ -27,9 +27,11 @@ export default async function boot(){
       if(pf){ this.openPlatform(pf, true); return; }
       const d=(e.state&&e.state.detail)||this.routeFromPath(location.pathname);
       if(d){ this.openDetail(d.kind, d.name, true); return; }
+      const rid=(e.state&&e.state.run)||this.runFromPath(location.pathname);
+      if(rid){ this.openRun(rid, true); return; }
       let v=(e.state&&e.state.view)||(location.hash||'').replace('#','')||'tools';
       if(v==='billing'){ this.orgTab='billing'; v='orgs'; }
-      if(['tools','orgs','activity','usage','admin','help','secrets','start','resources','connections','referrals'].includes(v)) this.go(v, true);
+      if(['tools','orgs','activity','usage','admin','help','secrets','start','resources','connections','referrals','hub'].includes(v)) this.go(v, true);
     });
     this.meta = await fetch('/meta',{headers:{'ngrok-skip-browser-warning':'1'}}).then(r=>r.json()).catch(()=>this.meta);
     this.proxy = this.meta.public_url || location.origin;
@@ -51,6 +53,7 @@ export default async function boot(){
     // before an OAuth hop (the callback always lands on /app, which would otherwise drop the path).
     let route=this.routeFromPath(location.pathname);
     let mkRoute=this.mkFromPath(location.pathname);
+    const runRoute=this.runFromPath(location.pathname);   // /app/runs/<id>: the hub's run page, members only
     // A public catalog URL renders the marketplace views with or without a session. Set BEFORE the
     // /auth/me check so the first paint is already in public mode, and drop the server-rendered
     // fallback (see `_spa_catalog_page`) now that the real UI is about to take over.
@@ -69,6 +72,7 @@ export default async function boot(){
       // enter that team — the emailed "Sign in & accept" click was the consent. Otherwise the normal
       // first-run / invite-banner flow.
       if(mkRoute){ this.maybeOnboard(); this.openProvider(mkRoute, true); return; }
+      if(runRoute){ this.maybeOnboard(); this.openRun(runRoute, true); return; }
       // Signed in on a /catalog URL: the same views, but as a member — so `publicCatalog` is
       // dropped and the shell comes back in full (vault, activity, try-it).
       if(catRoute){ this.publicCatalog=false; this.maybeOnboard();
@@ -94,6 +98,7 @@ export default async function boot(){
         if(catRoute.slug) this.openPlatform(catRoute.slug, true); else this.go('connections', true);
         return; }
       const pfTok=this.platformFromHash();
+      if(runRoute){ this.openRun(runRoute, true); return; }
       if(mkRoute) this.openProvider(mkRoute, true); else if(pfTok) this.openPlatform(pfTok, true); else if(route) this.openDetail(route.kind, route.name, true);
       else { const hv=this.viewFromHash(); if(hv) this.go(hv, true);
         else { this.go('start', true); history.replaceState({view:'start'},'','/app#start'); } }

@@ -51,6 +51,7 @@ switchOrg(o){ this.orgMenu=false; this.newAgent=null; this.snipAgent=null; this.
 async loadAll(){ this.err=''; this.loading=true;
       try{
         this.myOrgs=await this.api('/orgs');
+        this.probeHub();   // the Hub entry follows the active team (TREG_HUB_TEAMS); not awaited
         if(!this.sessionMode && !this.me){ const who=await this.api('/auth/me').catch(()=>null); if(who){ this.me=who.email; this.isAdmin=!!who.is_superadmin; } }  // token mode: learn our own email + superadmin flag (isPersonal / join-by-code)
         // Re-mint the bearer whenever the ACTIVE org changes: the token now bakes the org slug in
         // (so it works as a bare MCP Authorization bearer), and a stale one would name the old team.
