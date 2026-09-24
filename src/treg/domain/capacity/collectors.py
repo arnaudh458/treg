@@ -291,6 +291,25 @@ async def _harvestapi(c, key):
                     "Auto top-up is managed in HarvestAPI."}
 
 
+async def _fetchinio(c, key):
+    d = await _get(c, "https://api.fetchin.io/api/v1/subscription",
+                   headers={"X-API-Key": key})
+    remaining = d.get("creditsRemaining") if isinstance(d, dict) else None
+    if type(remaining) not in (int, float) or not math.isfinite(remaining) or remaining < 0:
+        raise ValueError("Fetchin returned no valid remaining-credit balance")
+    rps = d.get("rpsLimit")
+    renewal = d.get("renewalDate")
+    payg = d.get("paygCreditsRemaining")
+    return {
+        "value": remaining,
+        "unit": "credits",
+        "note": (f"plan {d.get('plan', 'unknown')}, status {d.get('status', 'unknown')}; "
+                 f"PAYG {payg if type(payg) in (int, float) else 'unknown'}; "
+                 f"renews {renewal or 'not scheduled'}; "
+                 f"account limit {rps if type(rps) is int else 'unknown'} requests/s"),
+    }
+
+
 async def _dropleads(c, key):
     d = await _get(c, "https://prime.dropleads.io/api/v2/prime-db/credits/balance",
                    headers={"X-API-Key": key})
@@ -789,6 +808,7 @@ BALANCE_ROUTES = {
     "seranking": _seranking,
     "hunter": _hunter,
     "harvestapi": _harvestapi,
+    "fetchinio": _fetchinio,
     "quickenrich": _quickenrich,
     "prospeo": _prospeo,
     "aiark": _aiark,

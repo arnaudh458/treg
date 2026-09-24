@@ -392,6 +392,23 @@ contracts:
     miss: "full_name == null"
     idempotent: true
 
+  linkedin.user.posts:
+    summary: "List a LinkedIn member's recent posts from a profile URL or handle — treg picks the provider and names the one that served"
+    identity:
+      - {linkedin_url: url}
+      - {linkedin_handle: str}
+    derive:
+      linkedin_url: "linkedin_url(linkedin_handle)"
+      linkedin_handle: "linkedin_handle(linkedin_url)"
+    filters:
+      limit: {type: int, default: 10, note: "posts per page where the provider takes a count"}
+    output:
+      posts: {type: list, required: true, note: "provider-native LinkedIn post rows"}
+      next_cursor: {type: str}
+      has_more: {type: bool}
+    miss: "posts == []"
+    idempotent: true
+
   google.keywords.volume:
     summary: "Monthly Google search volume (and CPC where the provider has it) for a list of keywords — one provider-native row per keyword in `rows`"
     identity:

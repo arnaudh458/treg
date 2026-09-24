@@ -16,6 +16,7 @@ import shlex
 from httpx import AsyncClient
 
 from treg import oauth_providers as P
+from treg.config import get_settings
 from treg.domain.catalog import store as cs
 from treg.domain.money import settlement
 
@@ -97,6 +98,34 @@ def test_serper_surface_is_live_verified_bounded_and_platform_safe():
     assert shown["serper.google.serp.maps"]["usd"] == 0.003
     assert shown["serper.google.serp.lens"]["usd"] == 0.003
     assert shown["serper.web.extract"]["usd"] == 0.01
+
+
+def test_fetchin_surface_is_live_verified_bounded_and_platform_safe(monkeypatch):
+    monkeypatch.setenv("TREG_PLATFORM_KEY_FETCHINIO", "PLATFORM-FETCHIN")
+    monkeypatch.setenv("TREG_PLATFORM_PROVIDERS", "fetchinio")
+    get_settings.cache_clear()
+    try:
+        cat = cs.load(refresh=True)
+        rows = {ep["id"]: ep for ep in cat.for_provider("fetchinio")}
+        assert set(rows) == {
+            "fetchinio.linkedin.user.profile",
+            "fetchinio.linkedin.company.profile",
+            "fetchinio.linkedin.user.posts",
+            "fetchinio.linkedin.user.reactions",
+            "fetchinio.linkedin.post.comments",
+            "fetchinio.linkedin.post.reactions",
+            "fetchinio.linkedin.post.engagement",
+        }
+        assert all(ep["method"] == "GET" and ep["strict_query"] for ep in rows.values())
+        assert all(ep["verified"] == "2026-09-24" and ep["example_file"]
+                   for ep in rows.values())
+        assert all(cat.platform_eligible(ep) for ep in rows.values())
+        shown = {eid: cat.cost_view(ep["cost"], "fetchinio") for eid, ep in rows.items()}
+        assert shown["fetchinio.linkedin.user.profile"]["usd"] == 0.0015
+        assert shown["fetchinio.linkedin.post.engagement"]["usd"] == 0.003
+        assert "fullProfile" not in rows["fetchinio.linkedin.user.profile"]["input"]["queryParams"]
+    finally:
+        get_settings.cache_clear()
 
 
 def test_olostep_surface_is_bounded_byok_and_platform_safe():

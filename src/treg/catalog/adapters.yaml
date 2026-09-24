@@ -2764,6 +2764,55 @@ adapters:
     out: {pages: output.data.items, count: "len(output.data.items)"}
     miss: "coalesce(output.data.items, []) == []"
 
+  # ---- Fetchin LinkedIn reads ---------------------------------------------------------------
+  fetchinio.linkedin.user.profile:
+    accepts: [[linkedin_url], [linkedin_handle]]
+    in: {linkedin_url: queryParams.profileUrlOrUrn, linkedin_handle: queryParams.profileUrlOrUrn}
+    out: {full_name: "join(firstName, lastName)", first_name: firstName, last_name: lastName,
+          headline: title, location: location, followers: followerCount, connections: connectionsCount,
+          about: description, linkedin_url: url}
+    miss: "coalesce(firstName, lastName) == null"
+  fetchinio.linkedin.company.profile:
+    accepts: [[linkedin_url], [linkedin_handle]]
+    in: {linkedin_url: queryParams.companyUrlOrUrn, linkedin_handle: queryParams.companyUrlOrUrn}
+    out: {name: name, description: description, website: websiteUrl, followers: followerCount,
+          employees: "fmt('{0}', employeeCount)", location: "join(headquarter.city, headquarter.country)",
+          linkedin_url: url}
+    miss: "name == null"
+  fetchinio.linkedin.user.posts:
+    accepts: [[linkedin_url], [linkedin_handle]]
+    in: {linkedin_url: queryParams.profileUrlOrUrn, linkedin_handle: queryParams.profileUrlOrUrn}
+    in_expr: {queryParams.count: limit}
+    out: {posts: posts, next_cursor: paginationToken, has_more: hasMore}
+    miss: "posts == []"
+  fetchinio.linkedin.post.comments:
+    accepts: [[post_urn], [post_id]]
+    in: {post_urn: queryParams.postUrlOrUrn, post_id: queryParams.postUrlOrUrn}
+    in_expr: {queryParams.count: limit}
+    out: {comments: comments, count: "len(comments)", next_cursor: paginationToken}
+    miss: "comments == []"
+  fetchinio.linkedin.post.reactions:
+    accepts: [[post_urn], [post_id]]
+    in: {post_urn: queryParams.postUrlOrUrn, post_id: queryParams.postUrlOrUrn}
+    in_expr: {queryParams.count: limit}
+    out: {reactions: reactions, count: "len(reactions)"}
+    miss: "reactions == []"
+
+  # The posts contract needs multiple independently verified children before its synthetic route
+  # exists. These two established providers expose the same provider-native list contract.
+  aviato.linkedin.user.posts:
+    accepts: [[linkedin_handle]]
+    in: {linkedin_handle: queryParams.linkedinID}
+    in_expr: {queryParams.perPage: limit}
+    out: {posts: results, next_cursor: paginationToken, has_more: hasMoreResults}
+    miss: "results == []"
+  harvestapi.linkedin.user.posts:
+    accepts: [[linkedin_handle]]
+    in: {linkedin_handle: queryParams.profilePublicIdentifier}
+    const: {queryParams.page: "1"}
+    out: {posts: elements, next_cursor: paginationToken}
+    miss: "elements == []"
+
   # ---- influencers.club enrich tiers: cache result admission only (`routed: false` contracts) --
   # A hit is a platform block under `result`; an unknown creator is HTTP 400 and never recorded.
   influencersclub.creators.enrich.raw:

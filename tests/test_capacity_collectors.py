@@ -150,6 +150,40 @@ async def test_serper_capacity_rejects_invalid_balance(balance):
             await collectors._serper(client, "test")
 
 
+async def test_fetchin_capacity_uses_free_subscription_balance_and_safe_rate():
+    def probe(request):
+        assert request.method == "GET"
+        assert request.url == "https://api.fetchin.io/api/v1/subscription"
+        assert request.headers["x-api-key"] == "test-key"
+        return httpx.Response(200, json={
+            "plan": "free", "status": "free", "creditsRemaining": 51_000,
+            "paygCreditsRemaining": 50_000, "renewalDate": None, "rpsLimit": 5,
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+        row = await collectors._fetchinio(client, "test-key")
+    assert row["value"] == 51_000
+    assert row["unit"] == "credits"
+    assert "account limit 5 requests/s" in row["note"]
+    capacity = policy.default_policy("fetchinio", has_key=True)
+    assert capacity.capacity_type == "credits"
+    assert capacity.funding_mode == "manual"
+    assert capacity.source == "api"
+    assert capacity.rate_limit == {"limit": 2, "window_s": 1, "source": "policy"}
+
+
+@pytest.mark.parametrize("remaining", [None, True, -1, "51000", float("nan")])
+async def test_fetchin_capacity_rejects_uncertain_balances(remaining):
+    def probe(_request):
+        if isinstance(remaining, float) and math.isnan(remaining):
+            return httpx.Response(200, content=b'{"creditsRemaining": NaN}')
+        return httpx.Response(200, json={"creditsRemaining": remaining})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(probe)) as client:
+        with pytest.raises(ValueError, match="remaining-credit"):
+            await collectors._fetchinio(client, "test-key")
+
+
 async def test_tavily_capacity_uses_account_pool_when_key_has_no_limit():
     payload = {
         "key": {"usage": 0, "limit": None},

@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 # `auth` is the provider's DEFAULT shape; a per-variable form (CLIENT_ID/SECRET → oauth2) can override
 # it. Served at GET /providers.json so the CLI can refresh centrally (bundled copy = offline fallback);
 # bump CATALOG_VERSION whenever entries change so a cache can tell it's stale.
-CATALOG_VERSION = 20  # v20 2026-09-24: ScrapeGraphAI key detection
+CATALOG_VERSION = 21  # v21 2026-09-25: Fetchin key detection
 # `skills` (optional) matches a SKILL FOLDER name for file-credential skills that have no env var to
 # key on (OAuth token files etc.) — see `match_skill`. Such providers carry `tokens: []` so the env
 # scanner never mis-detects them as a simple bearer key (their real auth is OAuth + extra headers).
@@ -134,6 +134,8 @@ CATALOG: list[dict] = [
     {"provider": "Ahrefs",      "tokens": ["AHREFS"],              "base_url": "https://api.ahrefs.com/v3",                       "auth": {"shape": "bearer"}},
     {"provider": "Apify",       "tokens": ["APIFY"],               "base_url": "https://api.apify.com/v2",                        "auth": {"shape": "bearer"}, "probe": "users/me"},
     {"provider": "ScrapeCreators", "tokens": ["SCRAPECREATORS"],   "base_url": "https://api.scrapecreators.com",                  "auth": {"shape": "api_key_header", "header": "x-api-key"}},
+    {"provider": "Fetchin", "tokens": ["FETCHINIO"], "base_url": "https://api.fetchin.io",
+     "auth": {"shape": "api_key_header", "header": "X-API-Key"}, "probe": "api/v1/subscription"},
     {"provider": "Sumble", "tokens": ["SUMBLE"], "base_url": "https://api.sumble.com/v9",
      "auth": {"shape": "bearer"}},
     {"provider": "MoltSets", "tokens": ["MOLTSETS"],

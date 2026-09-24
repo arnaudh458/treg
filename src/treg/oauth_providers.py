@@ -1415,6 +1415,23 @@ HARVESTAPI = OAuthProvider(
     probe_path="/users/my-api-user",  # Internal only; live bad key 401, valid key 200.
 )
 
+FETCHINIO = OAuthProvider(
+    service="fetchinio", display_name="Fetchin", auth_kind="key",
+    token_label="API key", token_placeholder="your Fetchin API key",
+    token_header="X-API-Key", token_format="{secret}",
+    setup_url="https://fetchin.io/dashboard",
+    setup_action_label="Get your Fetchin API key",
+    setup_steps=("Sign in to Fetchin and open the API keys section.",
+                 "Create or copy an API key and paste it here."),
+    setup_note=("LinkedIn profile, company, post and engagement calls consume account credits. "
+                "Connection verification reads the free subscription endpoint."),
+    auth_uri="", token_uri="", scopes={}, client_id_setting="", client_secret_setting="",
+    category="Enrichment",
+    summary="Retrieve public LinkedIn profiles, companies, posts, comments and reactions.",
+    base_url="https://api.fetchin.io", docs_url="https://docs.fetchin.io/",
+    probe_path="/api/v1/subscription",
+)
+
 DROPLEADS = OAuthProvider(
     service="dropleads", display_name="Dropleads", auth_kind="key",
     token_label="API key", token_placeholder="your Dropleads API key",
@@ -3553,7 +3570,7 @@ REGISTRY: dict[str, OAuthProvider] = {
         GOOGLE_ADS, YOUTUBE,
         LINKEDIN, SLACK, X, TIKTOK, FACEBOOK, INSTAGRAM, META_ADS,
         # API-key providers
-        ANYAPI, APOLLO, PDL, AKTA, HUNTER, SUMBLE, MOLTSETS, OPENMART, HARVESTAPI, DROPLEADS,
+        ANYAPI, APOLLO, PDL, AKTA, HUNTER, SUMBLE, MOLTSETS, OPENMART, HARVESTAPI, FETCHINIO, DROPLEADS,
         QUICKENRICH, PROSPEO, AIARK, WIZA, LIMADATA, GETLEADSIO, SCRUBBY, ZEROBOUNCE, DATAGMA,
         TRYKITT, CONTACTOUT, MILLIONVERIFIER, BOUNCEBAN, CRUNCHBASE, MINIMAX, FISHAUDIO,
         OPENROUTER,
