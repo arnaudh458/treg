@@ -2771,7 +2771,7 @@ adapters:
     out: {full_name: "join(firstName, lastName)", first_name: firstName, last_name: lastName,
           headline: title, location: location, followers: followerCount, connections: connectionsCount,
           about: description, linkedin_url: url}
-    miss: "id == null"
+    miss: "coalesce(firstName, lastName) == null"
   fetchinio.linkedin.company.profile:
     accepts: [[linkedin_url], [linkedin_handle]]
     in: {linkedin_url: queryParams.companyUrlOrUrn, linkedin_handle: queryParams.companyUrlOrUrn}

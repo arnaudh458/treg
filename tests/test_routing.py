@@ -196,6 +196,10 @@ def test_fetchin_linkedin_adapters_are_verified_and_routed():
     assert "fetchinio.linkedin.user.reactions" not in cat.adapters
     assert "fetchinio.linkedin.post.engagement" not in cat.adapters
 
+    profile = cat.adapters["fetchinio.linkedin.user.profile"]
+    assert profile.is_miss({"id": "profile-id", "firstName": None, "lastName": None})
+    assert not profile.is_miss({"id": "profile-id", "firstName": "Ada", "lastName": None})
+
 
 async def test_fetchin_member_posts_route_uses_adapter_and_settles(
     clients: AsyncClient, platform_on, monkeypatch,
