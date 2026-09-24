@@ -1051,16 +1051,97 @@ async def test_a_rejection_carries_a_reason_and_listing_again_asks_again(clients
     assert (await _decide(clients, monkeypatch, tool_id, "approve")).status_code == 404
 
 
-async def test_an_approval_stays_when_a_new_version_is_published(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+async def _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, now faster."):
+    m = _steps_manifest(steps=[{"name": "people", "call": EP, "input": {"aweme_id": "$input.domain"}}],
+                        output={"leads": "$people.data"}, summary=summary)
+    return await clients.put(f"/hub/tools/{tool_id}", json={"manifest": m, "check": CHECK, "readme": "x"})
+
+
+async def _decide_update(clients, monkeypatch, tool_id, decision, reason=""):
+    monkeypatch.setenv("TREG_ADMIN_TOKEN", ADMIN)
+    get_settings.cache_clear()
+    return await clients.post(f"/admin/hub/updates/{tool_id}", json={"decision": decision, "reason": reason},
+                              headers={"X-Treg-Token": ADMIN})
+
+
+async def test_a_new_version_of_a_listed_tool_waits_for_review(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Round 4 (Jason): every update to a listed tool goes through treg. v2 passes its check and
+    waits; v1 keeps serving callers and search; only the maker can try v2 by @2."""
     pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
     tool_id = pub["tool_id"]
     await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
     await _decide(clients, monkeypatch, tool_id, "approve")
-    m = _steps_manifest(steps=[{"name": "people", "call": EP, "input": {"aweme_id": "$input.domain"}}],
-                        output={"leads": "$people.data"}, summary="Decision makers of a company, with verified emails, now faster.")
-    r = await clients.put(f"/hub/tools/{tool_id}", json={"manifest": m, "check": CHECK, "readme": "x"})
-    assert r.status_code == 200 and r.json()["version"] == 2 and r.json()["status"] == "live", r.text
+    r = await _v2(clients, tool_id)
+    assert r.status_code == 200 and r.json()["status"] == "review" and "waits for treg" in r.json()["message"]
+    assert (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]["version"] == 1
+    assert tool_id in await _search_ids(clients)                                          # still listed, as v1
+    stranger = {"X-Treg-Token": (await funded_user(clients, "v2-stranger@example.com"))["token"]}
+    run = await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=stranger)
+    assert run.status_code == 200 and run.json()["recipe"] == f"{tool_id}@1"
+    assert (await clients.post(f"/call/{tool_id}@2", json={"domain": "x"}, headers=stranger)).status_code == 404
+    assert (await clients.post(f"/call/{tool_id}@2", json={"domain": "x"})).status_code == 200   # the maker
+    queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
+    assert queue[0]["tool_id"] == tool_id and queue[0]["now"]["version"] == 1 and queue[0]["new"]["version"] == 2
+    assert queue[0]["new"]["summary"].endswith("now faster.")
+    r = await _decide_update(clients, monkeypatch, tool_id, "approve")
+    assert r.status_code == 200 and r.json()["listing"]["update"] is None
+    run = await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=stranger)
+    assert run.json()["recipe"] == f"{tool_id}@2"
     assert tool_id in await _search_ids(clients)
+
+
+async def test_a_rejected_update_keeps_the_approved_version(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    await _v2(clients, tool_id)
+    assert (await _decide_update(clients, monkeypatch, tool_id, "reject")).status_code == 422      # no reason
+    r = await _decide_update(clients, monkeypatch, tool_id, "reject", "v2 drops the verified emails")
+    assert r.json()["listing"]["update"] == {"state": "rejected", "version": None, "pricing": None,
+                                             "reason": "v2 drops the verified emails"}
+    mine = {t["version"]: t["status"] for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id}
+    assert mine == {1: "live", 2: "rejected"}
+    assert (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]["version"] == 1
+    # v3 waits again, and a newer waiting version replaces an older one
+    await _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, v3.")
+    await _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, v4.")
+    mine = {t["version"]: t["status"] for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id}
+    assert mine == {1: "live", 2: "rejected", 3: "superseded", 4: "review"}
+
+
+async def test_a_price_change_on_a_listed_tool_waits_for_review(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.5})
+    assert r.json()["price_label"] == "$0.01 a run" and r.json()["pending_price_usd"] == 0.5
+    assert (await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 500})).status_code == 422   # checked now
+    stranger = {"X-Treg-Token": (await funded_user(clients, "price-stranger@example.com"))["token"]}
+    run = await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=stranger)
+    assert run.json()["usage"]["price_micro"] == 10_000                                   # the approved price
+    queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
+    assert queue[0]["new_price_usd"] == 0.5 and queue[0]["new"] is None
+    await _decide_update(clients, monkeypatch, tool_id, "approve")
+    run = await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=stranger)
+    assert run.json()["usage"]["price_micro"] == 500_000
+
+
+async def test_leaving_search_releases_what_waits(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """An unlisted tool is self-serve: unlisting (or a rejected listing) lets the waiting version
+    and price through, as they would have gone for a tool nobody can find."""
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    await _v2(clients, tool_id)
+    await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.02})
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": False})
+    got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]
+    assert got["version"] == 2 and got["price_line"].startswith("seller $0.02 a run")
+    # an unlisted tool's next version goes live at once
+    assert (await _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, v3.")).json()["status"] == "live"
 
 
 async def test_the_review_queue_is_superadmin_only(clients: AsyncClient, hub_on, platform_on, monkeypatch):

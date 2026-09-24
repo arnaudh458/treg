@@ -81,6 +81,10 @@ async def _publish(body: PublishIn, request: Request, caller: Caller, db: AsyncS
     if row.status == "live":
         out["call"] = f"POST /call/{published.tool_id}"
         out["page"] = f"{get_settings().public_url.rstrip('/')}/hub/{published.tool_id}"
+    elif row.status == "review":
+        out["message"] = (f"passed its check and waits for treg's review: {published.tool_id} is listed, so "
+                          f"callers keep the approved version until this one is approved. Try it yourself "
+                          f"with POST /call/{published.tool_id}@{published.version}.")
     return out
 
 
@@ -392,6 +396,10 @@ async def set_hub_tool_price(
     if body.price_usd is not None:
         out["pricing"] = hub_app.stored_pricing({"price_usd": row.price_micro / 1_000_000, **row.manifest})
         out["price_label"] = hub_app.price_label(row.manifest)
+        pending = (await hub_app.listings_of(db, [base])).get(base)
+        if pending is not None and pending.pending_pricing:
+            out["pending_price_usd"] = pending.pending_pricing["price_usd"]
+            out["message"] = "the tool is listed, so the new price waits for treg's review; the price above serves until then"
     if body.listed is not None:
         out.update(hub_app.listing_view((await hub_app.listings_of(db, [base])).get(base)))
     if body.public_log is not None:
@@ -470,5 +478,43 @@ async def admin_hub_listing_decide(
         raise HTTPException(status_code=422, detail={"error": "capability_invalid", "field": exc.field, "rule": exc.rule}) from None
     if lst is None:
         raise HTTPException(status_code=404, detail=f"no listing request for {tool_id!r}")
+    await db.commit()
+    return {"tool_id": tool_id, **hub_app.listing_view(lst)}
+
+
+# Updates to an approved tool (round 4): a new version or a price change waits here. Approve makes
+# it serve everyone; reject keeps the approved one and tells the maker why.
+
+class UpdateDecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: str = Field(pattern="^(approve|reject)$")
+    reason: str = Field(default="", max_length=500)
+
+
+@app.get("/admin/hub/updates")
+async def admin_hub_updates(
+    admin: str = Depends(require_superadmin), db: AsyncSession = Depends(get_admin_session),
+) -> list[dict]:
+    """The update queue: each approved tool with a version or a price waiting, what serves now
+    beside what would replace it."""
+    if not hub_app.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await hub_app.pending_updates(db)
+
+
+@app.post("/admin/hub/updates/{tool_id}")
+async def admin_hub_update_decide(
+    tool_id: str, body: UpdateDecisionIn, admin: str = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_admin_session),
+) -> dict:
+    if not hub_app.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    if body.decision == "reject" and not body.reason.strip():
+        raise HTTPException(status_code=422, detail={"error": "reason_required",
+                                                     "rule": "say why, in words the maker can act on"})
+    lst = await hub_app.decide_update(db, tool_id=tool_id, approve=body.decision == "approve",
+                                      reason=body.reason, admin_email=admin)
+    if lst is None:
+        raise HTTPException(status_code=404, detail=f"no update waiting for {tool_id!r}")
     await db.commit()
     return {"tool_id": tool_id, **hub_app.listing_view(lst)}

@@ -7,8 +7,16 @@ async loadAdmin(){ this.confirmAdmUser=null; this.confirmAdmOrg=null;
 // Hub listing review: a maker's `treg hub list` is a request; approve puts the tool in search,
 // reject takes it out with a reason the maker reads. 404 = the hub is off here: no section.
 async loadAdminHub(state){ if(state) this.admHub={...this.admHub, state};
-      try{ const rows=await this.api('/admin/hub/listings?state='+this.admHub.state); this.admHub={...this.admHub, on:true, rows}; }
+      try{ const rows=await this.api('/admin/hub/listings?state='+this.admHub.state);
+           const updates=await this.api('/admin/hub/updates').catch(()=>[]);
+           this.admHub={...this.admHub, on:true, rows, updates}; }
       catch(e){ this.admHub={...this.admHub, on:false, rows:[]}; } },
+async admHubUpdate(u, decision){ const reason=(this.admHub.reason['u:'+u.tool_id]||'').trim();
+      if(decision==='reject' && !reason){ this.err='Write the reason first: the maker reads it.'; return; }
+      this.admHub={...this.admHub, busy:u.tool_id}; this.err='';
+      try{ await this.api('/admin/hub/updates/'+encodeURIComponent(u.tool_id), {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({decision, reason})}); }
+      catch(e){ this.err='Update decision failed: '+(e.detail&&e.detail.rule||e.detail||e.status); }
+      this.admHub={...this.admHub, busy:null}; await this.loadAdminHub(); },
 async admHubDecide(r, decision){ const reason=(this.admHub.reason[r.tool_id]||'').trim();
       if(decision==='reject' && !reason){ this.err='Write the reason first: the maker reads it.'; return; }
       this.admHub={...this.admHub, busy:r.tool_id}; this.err='';

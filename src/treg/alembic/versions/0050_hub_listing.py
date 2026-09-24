@@ -5,9 +5,11 @@ Revises: 0049
 Create Date: 2026-09-24
 
 One row per tool (docs/hub-listing-decisions.md round 2): state requested | approved | rejected,
-so an approval outlives a version. Expand only: `hubtool.listed` stays in the table, unread from this
+so a listing outlives a version. Expand only: `hubtool.listed` stays in the table, unread from this
 revision on (the hub was off in production, so no tool was listed there), for a later contract
-revision to drop. `capability` is the catalog job treg approved with the listing (round 3).
+revision to drop. `capability` is the catalog job treg approved with the listing (round 3); `pending_version`,
+`pending_pricing` and `update_reason` hold an update to an approved tool while it waits for review
+(round 4).
 """
 from collections.abc import Sequence
 
@@ -32,6 +34,9 @@ def upgrade() -> None:
         sa.Column("decided_by", sa.String(), nullable=False, server_default=""),
         sa.Column("decided_at", sa.DateTime(), nullable=True),
         sa.Column("capability", sa.String(), nullable=False, server_default=""),
+        sa.Column("pending_version", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("pending_pricing", sa.JSON(), nullable=True),
+        sa.Column("update_reason", sa.String(), nullable=False, server_default=""),
     )
     op.create_index("ix_hublisting_org_id", "hublisting", ["org_id"])
     op.create_index("ix_hublisting_state", "hublisting", ["state"])

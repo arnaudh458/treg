@@ -33,6 +33,23 @@ export default { setup: useDashboard }
                 </td>
               </tr>
             </table>
+            <div class="grp" style="margin:18px 0 8px">Hub updates waiting <span class="muted">(listed tools: a new version or a new price)</span></div>
+            <p v-if="!admHub.updates.length" class="sub">None waiting.</p>
+            <table v-else>
+              <tr><th>Tool</th><th>Serves now</th><th>Would replace it</th><th></th></tr>
+              <tr v-for="u in admHub.updates" :key="'u'+u.tool_id">
+                <td><b>{{u.tool_id}}</b></td>
+                <td class="sub">v{{u.now&&u.now.version}} · {{u.now&&u.now.price_label}}<div style="max-width:40ch">{{u.now&&u.now.summary}}</div></td>
+                <td class="sub"><template v-if="u.new">v{{u.new.version}} · {{u.new.price_label}} · check {{u.new.check}}<div style="max-width:40ch">{{u.new.summary}}</div>
+                    <div v-if="u.now && JSON.stringify(u.now.uses)!==JSON.stringify(u.new.uses)">uses: {{u.new.uses.join(', ')}}</div></template>
+                  <div v-if="u.new_price_usd!=null"><b>new price: ${{u.new_price_usd}}</b></div></td>
+                <td style="text-align:right;white-space:nowrap">
+                  <input v-model="admHub.reason['u:'+u.tool_id]" placeholder="reason, to reject" style="width:160px" aria-label="Reason to reject the update"/>
+                  <button class="btn sm primary" :disabled="admHub.busy===u.tool_id" @click="admHubUpdate(u,'approve')" style="margin-left:6px">Approve</button>
+                  <button class="btn sm" :disabled="admHub.busy===u.tool_id" @click="admHubUpdate(u,'reject')" style="margin-left:6px">Reject</button>
+                </td>
+              </tr>
+            </table>
             <div style="height:22px"></div>
           </template>
 

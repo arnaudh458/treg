@@ -425,6 +425,23 @@
   {
     "kind": "APIRoute",
     "methods": [
+      "GET",
+      "HEAD"
+    ],
+    "name": "admin_hub_updates",
+    "path": "/admin/hub/updates"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
+      "POST"
+    ],
+    "name": "admin_hub_update_decide",
+    "path": "/admin/hub/updates/{tool_id}"
+  },
+  {
+    "kind": "APIRoute",
+    "methods": [
       "POST"
     ],
     "name": "host_media",

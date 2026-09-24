@@ -5310,8 +5310,11 @@ def _hub_report(r, *, json_out: bool) -> None:
     elif r.status_code in (200, 201):
         chk = payload.get("check") or {}
         live = payload.get("status") == "live"
-        _section("✓ Published" if live else "Published, but the check failed")
+        review = payload.get("status") == "review"
+        _section("✓ Published" if live else "✓ Published, waiting for treg's review" if review else "Published, but the check failed")
         _kv("tool", f"{_B}{payload.get('tool_id')}{_R}  version {payload.get('version')}  {_G if live else _AM}{payload.get('status')}{_R}")
+        if review and payload.get("message"):
+            _arrow(payload["message"])
         if chk:
             if chk.get("status") == "passed":
                 _ok(f"check passed   run {chk.get('run_id')}   charged {chk.get('charged_micro', 0)} µ$ to your balance")
@@ -5480,6 +5483,11 @@ def cmd_hub_price(args, cfg) -> None:
     if r.status_code != 200:
         _hub_report(r, json_out=getattr(args, "json", False))
     d = r.json()
+    if d.get("pending_price_usd") is not None:
+        _section("Price change waiting for review")
+        _kv("tool", f"{d['tool_id']}  v{d['version']}")
+        _kv("price", f"{d.get('price_label', '')} serves now; ${d['pending_price_usd']:.6g} after treg approves it")
+        return
     _section("Price changed")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
     _kv("price", f"{d.get('price_label', '')}; applies to later runs")

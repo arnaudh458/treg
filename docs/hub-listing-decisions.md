@@ -61,3 +61,20 @@ and runs by other teams move it; after about 20 the seed barely counts. Until th
 marked `estimated`. The owner chose a seed over hiding new tools: hidden, a tool never gets the runs
 that would prove it.
 
+## Round 4 — every update to a listed tool goes through treg (2026-09-24, owner + Jason)
+
+Jason: a maker could get a tool approved, then publish a version that charges more or returns
+worse data. Decided:
+
+**1. Any update to a listed tool waits for review:** a new version and a price change. The approved
+version and price keep serving callers, search and the place beside providers until treg approves.
+This replaces round 2's "an approval stays across new versions".
+
+**2. The maker can still try it.** A waiting version answers `<id>@N` for the maker's team only.
+
+**3. A rejection keeps the approved version,** marks the new one `rejected`, drops the new price,
+and gives the maker the reason.
+
+**4. Unlisted tools stay self-serve.** A tool nobody can find publishes and prices without review;
+unlisting releases whatever was waiting.
+

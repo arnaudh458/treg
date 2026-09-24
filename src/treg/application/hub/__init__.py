@@ -81,8 +81,9 @@ async def tool_for(db: AsyncSession, rest: str, *, live_only: bool = True,
     row = (await db.execute(select(HubTool).where(HubTool.tool_id == tool_id, HubTool.version == pin))).scalars().first()
     if row is None:
         return None
-    if row.status == "checking":
-        # the check run pins it (round 2 q10); anyone else who guesses @N gets nothing (8.1 review)
+    if row.status in ("checking", "review"):
+        # the check run pins it (round 2 q10); a version waiting for review (round 4) is the maker's to
+        # try by @N and nobody else's; anyone else who guesses @N gets nothing (8.1 review)
         return row if caller_org_id is None or row.org_id == caller_org_id else None
     if live_only and row.status != "live":
         return None
@@ -205,6 +206,8 @@ async def run_check(db: AsyncSession, row: HubTool, *, maker_headers: dict[str, 
             body = {"text": r.text[:600]}
         verdict = verdict_from(row, r.status_code, body, dict(r.headers))
         row.status = "live" if verdict["status"] == "passed" else "failed"
+        if row.status == "live":
+            await _hold_for_review(db, row)
         row.check_result = verdict
         db.add(row)
         return verdict
@@ -281,8 +284,14 @@ def listing_view(listing: HubListing | None) -> dict[str, Any]:
     admin's reason on a rejection)."""
     if listing is None:
         return {"listed": False, "listing": {"state": "none"}}
+    update = None
+    if listing.pending_version or listing.pending_pricing or listing.update_reason:
+        update = {"state": "pending" if (listing.pending_version or listing.pending_pricing) else "rejected",
+                  "version": listing.pending_version or None, "pricing": listing.pending_pricing,
+                  "reason": listing.update_reason}
     return {"listed": listing.state == "approved",
             "listing": {"state": listing.state, "reason": listing.reason, "capability": listing.capability,
+                        "update": update,
                         "requested_at": listing.requested_at.isoformat(),
                         "decided_at": listing.decided_at.isoformat() if listing.decided_at else None}}
 
@@ -353,6 +362,22 @@ async def set_price(db: AsyncSession, *, org_id: int, tool_id: str, price_usd: f
         .order_by(HubTool.version.desc()).limit(1))).scalars().first()
     if row is None:
         return None
+    lst = await db.get(HubListing, tool_id)
+    if lst is not None and lst.state == "approved":
+        # A listed tool's price is public: the new one waits for review (round 4); check it now so
+        # the maker hears a bad number at once, not from the reviewer.
+        if row.kind == "script":
+            hub_manifest._money_micro("max_price_usd", price_usd, allow_zero=False)
+        else:
+            hub_manifest._validate_price(price_usd)
+        lst.pending_pricing, lst.update_reason = {"price_usd": float(price_usd)}, ""
+        db.add(lst)
+        return row
+    return await _apply_price(db, row, price_usd)
+
+
+async def _apply_price(db: AsyncSession, row: HubTool, price_usd: float) -> HubTool:
+    from ...domain.hub import manifest as hub_manifest
     if row.kind == "script":
         micro = hub_manifest._money_micro("max_price_usd", price_usd, allow_zero=False)
         row.manifest = {**{k: v for k, v in row.manifest.items() if k != "price_usd"},
@@ -447,6 +472,7 @@ async def set_flags(db: AsyncSession, *, org_id: int, tool_id: str, maker_email:
         current = await db.get(HubListing, tool_id)
         if not listed:
             if current is not None:
+                await _release_update(db, current)       # no longer public: no longer reviewed
                 await db.delete(current)
         elif current is None:
             db.add(HubListing(tool_id=tool_id, org_id=org_id, state="requested", requested_by=maker_email))
@@ -507,6 +533,7 @@ async def decide_listing(db: AsyncSession, *, tool_id: str, approve: bool, reaso
         lst.capability = capability
     else:
         lst.capability = ""
+        await _release_update(db, lst)                   # out of search: its update needs no review
     lst.state, lst.reason = ("approved", "") if approve else ("rejected", reason.strip()[:500])
     lst.decided_by, lst.decided_at = admin_email, utcnow_naive()
     db.add(lst)
@@ -564,4 +591,93 @@ async def capability_siblings(db: AsyncSession, capability: str, *, exclude: str
 async def approved_capability(db: AsyncSession, tool_id: str) -> str:
     lst = await db.get(HubListing, tool_id)
     return lst.capability if lst is not None and lst.state == "approved" else ""
+
+
+# ---------------------------------------------------------------------------------------------
+# Updates to an approved tool wait for review (docs/hub-listing-decisions.md round 4): a new version
+# and a price change. The approved version and price keep serving until treg decides.
+
+async def _hold_for_review(db: AsyncSession, row: HubTool) -> None:
+    """A version that passed its check becomes `review` instead of `live` when its tool is approved
+    for search. A newer one replaces an older one still waiting (`superseded`)."""
+    lst = await db.get(HubListing, row.tool_id)
+    if lst is None or lst.state != "approved":
+        return
+    if lst.pending_version and lst.pending_version != row.version:
+        old = (await db.execute(select(HubTool).where(HubTool.tool_id == row.tool_id,
+                                                      HubTool.version == lst.pending_version))).scalars().first()
+        if old is not None and old.status == "review":
+            old.status = "superseded"
+            db.add(old)
+    row.status = "review"
+    lst.pending_version, lst.update_reason = row.version, ""
+    db.add(lst)
+
+
+async def _release_update(db: AsyncSession, lst: HubListing) -> None:
+    """The tool left search (unlisted, or its listing rejected): what waited needs no review. The
+    waiting version goes live and the waiting price applies, as for any unlisted tool."""
+    if lst.pending_version:
+        row = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id,
+                                                      HubTool.version == lst.pending_version))).scalars().first()
+        if row is not None and row.status == "review":
+            row.status = "live"
+            db.add(row)
+            await db.flush()
+    if lst.pending_pricing:
+        row = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id, HubTool.status == "live")
+                                .order_by(HubTool.version.desc()).limit(1))).scalars().first()
+        if row is not None:
+            await _apply_price(db, row, lst.pending_pricing["price_usd"])
+    lst.pending_version, lst.pending_pricing, lst.update_reason = 0, None, ""
+    db.add(lst)
+
+
+async def pending_updates(db: AsyncSession) -> list[dict[str, Any]]:
+    """The review queue of updates: every approved tool with a version or a price waiting, each with
+    what serves now beside what would replace it, so the reviewer reads the change."""
+    rows = (await db.execute(select(HubListing).where(HubListing.state == "approved")
+                             .order_by(HubListing.tool_id))).scalars().all()
+
+    def side(t: HubTool | None) -> dict[str, Any] | None:
+        if t is None:
+            return None
+        return {"version": t.version, "kind": t.kind, "summary": t.summary, "price_label": price_label(t.manifest),
+                "uses": t.manifest.get("uses", []), "capability": t.manifest.get("capability"),
+                "check": (t.check_result or {}).get("status")}
+    out = []
+    for lst in rows:
+        if not (lst.pending_version or lst.pending_pricing):
+            continue
+        now = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id, HubTool.status == "live")
+                                .order_by(HubTool.version.desc()).limit(1))).scalars().first()
+        new = None
+        if lst.pending_version:
+            new = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id,
+                                                          HubTool.version == lst.pending_version))).scalars().first()
+        out.append({"tool_id": lst.tool_id, "now": side(now), "new": side(new),
+                    "new_price_usd": (lst.pending_pricing or {}).get("price_usd")})
+    return out
+
+
+async def decide_update(db: AsyncSession, *, tool_id: str, approve: bool, reason: str,
+                        admin_email: str) -> HubListing | None:
+    """Approve: the waiting version goes live and serves everyone; the waiting price applies to the
+    version that serves. Reject: the waiting version is `rejected` (kept, never served), the waiting
+    price dropped, and the maker reads the reason. None when nothing waits. Does not commit."""
+    lst = await db.get(HubListing, tool_id)
+    if lst is None or not (lst.pending_version or lst.pending_pricing):
+        return None
+    if approve:
+        await _release_update(db, lst)
+    else:
+        if lst.pending_version:
+            row = (await db.execute(select(HubTool).where(HubTool.tool_id == tool_id,
+                                                          HubTool.version == lst.pending_version))).scalars().first()
+            if row is not None and row.status == "review":
+                row.status = "rejected"
+                db.add(row)
+        lst.pending_version, lst.pending_pricing, lst.update_reason = 0, None, reason.strip()[:500]
+        db.add(lst)
+    return lst
 

@@ -1610,6 +1610,27 @@
         "title": "TopupIn",
         "type": "object"
       },
+      "UpdateDecisionIn": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "pattern": "^(approve|reject)$",
+            "title": "Decision",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "UpdateDecisionIn",
+        "type": "object"
+      },
       "UserIn": {
         "properties": {
           "email": {
@@ -2355,6 +2376,133 @@
           }
         },
         "summary": "Admin Hub Listing Decide"
+      }
+    },
+    "/admin/hub/updates": {
+      "get": {
+        "description": "The update queue: each approved tool with a version or a price waiting, what serves now\nbeside what would replace it.",
+        "operationId": "admin_hub_updates_admin_hub_updates_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-treg-token",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "X-Treg-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "treg_session",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Treg Session",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Admin Hub Updates Admin Hub Updates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Hub Updates"
+      }
+    },
+    "/admin/hub/updates/{tool_id}": {
+      "post": {
+        "operationId": "admin_hub_update_decide_admin_hub_updates__tool_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tool_id",
+            "required": true,
+            "schema": {
+              "title": "Tool Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-treg-token",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "X-Treg-Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "cookie",
+            "name": "treg_session",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Treg Session",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDecisionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Admin Hub Update Decide Admin Hub Updates  Tool Id  Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Admin Hub Update Decide"
       }
     },
     "/admin/orgs": {

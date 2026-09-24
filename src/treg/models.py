@@ -1323,7 +1323,7 @@ class HubTool(SQLModel, table=True):
 class HubListing(SQLModel, table=True):
     """A hub tool's place in catalog search (docs/hub-listing-decisions.md round 2, 2026-09-24): the
     maker requests it, a superadmin approves or rejects it. One row per tool, not per version, so
-    an approval stays when a new version is published; unlisting deletes the row, and listing again
+    the listing stays while each new version waits for its own review (round 4); unlisting deletes the row, and listing again
     is a new request. Only `approved` puts the tool in search."""
 
     tool_id: str = Field(primary_key=True)           # `<slug>.<name>`
@@ -1337,6 +1337,13 @@ class HubListing(SQLModel, table=True):
     # The catalog job treg approved for it (round 3): the tool then sits beside that job's providers
     # in catalog_get. "" = in search, but beside nobody. Set only by an approval.
     capability: str = Field(default="", index=True)
+    # An update to an approved tool waits for review (round 4): a new version (`pending_version`,
+    # its HubTool row in status `review`) and/or a new price (`pending_pricing`, {"price_usd": N}).
+    # The approved version and price keep serving until treg approves; a rejection leaves them and
+    # says why in `update_reason`.
+    pending_version: int = Field(default=0)
+    pending_pricing: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+    update_reason: str = Field(default="")
 
 
 class HubRun(SQLModel, table=True):

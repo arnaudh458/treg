@@ -295,7 +295,7 @@ bump; a script's amounts change only with a new version of run.js.
   rate from runs by others; unlisted, unapproved, failed and retired never appear.
 - **The listing review** (`docs/hub-listing-decisions.md` round 2, 2026-09-24): `PATCH
   /hub/tools/{id} {"listed": true}` (`treg hub list`) is a request, a `HubListing` row, one per
-  tool and not per version, so an approval stays across new versions (migration 0050; the old
+  tool and not per version, so the listing stays while each new version is reviewed (below; migration 0050; the old
   per-version `hubtool.listed` column stays unread, expand-only). `set_flags` creates it in state
   `requested`, asks again from `rejected`, leaves `requested` and `approved` alone; `listed: false`
   deletes it. A superadmin reads the queue (`GET /admin/hub/listings?state=`, `pending_listings`:
@@ -313,6 +313,17 @@ bump; a script's amounts change only with a new version of run.js.
   (`seeded_observed`: 90% counted as 5 runs, blended with the last 30 days of runs by other teams,
   `estimated` under 20 runs), because a new tool has nothing to compare. It is never a routed child:
   an agent compares and picks (non-negotiable 4).
+- **Updates to a listed tool** (round 4): a version that passes its check on an APPROVED tool
+  becomes `review`, not `live` (`_hold_for_review`), so every surface that reads `live` keeps the
+  approved version; a newer waiting version makes the older one `superseded`. `tool_for` serves a
+  pinned `review` version to the maker's team only. `treg hub price` on an approved tool is checked
+  and stored as `HubListing.pending_pricing`. The queue is `GET /admin/hub/updates`
+  (`pending_updates`: what serves now beside what would replace it); `POST
+  /admin/hub/updates/{id} {decision, reason}` (`decide_update`) approves (the version goes live, the
+  price applies) or rejects (the version becomes `rejected`, the price is dropped, the maker reads
+  `listing.update.reason`). Unlisting or a rejected listing releases what waits
+  (`_release_update`): an unlisted tool is self-serve. The approved capability stays across an
+  approved update; the admin changes it by approving the listing again.
 - **The public share page** `GET /hub/<id>` (and `.md`; `@N`): the contract for a person or an
   agent on the public stylesheet; the price as the mode and the worst case ("seller $X per unit,
   up to $Y per run"; the schema.org Offer carries the worst case); the RUN LOG when the maker left

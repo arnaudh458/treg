@@ -106,7 +106,7 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
             </template>
 
             <template v-if="hub.tab==='listing'">
-              <p class="sub">Neither choice bumps the version.</p>
+              <p class="sub">Neither choice bumps the version. Once listed, every new version and price change waits for treg's review.</p>
               <div style="margin:14px 0 4px">
                 <div class="lbl">In catalog search</div>
                 <p class="sub" style="margin:4px 0;max-width:70ch">
@@ -118,9 +118,15 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
                   <template v-else-if="hub.tool.capability">Proposed job: <code>{{hub.tool.capability}}</code>. Once approved, your tool sits beside that job's providers.</template>
                   <template v-else>No job named. Add <code>"capability"</code> to recipe.json (a capability id from <code>treg catalog search</code>) to sit beside that job's providers once approved.</template>
                 </p>
+                <p v-if="hub.tool.listing && hub.tool.listing.update" class="sub" style="margin:4px 0;max-width:70ch">
+                  <template v-if="hub.tool.listing.update.state==='pending'"><b class="warn">An update waits for treg's review:</b>
+                    <template v-if="hub.tool.listing.update.version"> version {{hub.tool.listing.update.version}}</template><template v-if="hub.tool.listing.update.version && hub.tool.listing.update.pricing"> and</template>
+                    <template v-if="hub.tool.listing.update.pricing"> the price ${{hub.tool.listing.update.pricing.price_usd}}</template>. Callers keep the approved one until then.</template>
+                  <template v-else><b class="warn">Your last update was rejected:</b> {{hub.tool.listing.update.reason}}{{/[.!?]$/.test(hub.tool.listing.update.reason)?'':'.'}} The approved version still serves.</template>
+                </p>
                 <button v-if="['none','rejected'].includes(hubListing(hub.tool))" class="btn sm primary" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @click="setHubFlag('listed',true)">{{hubListing(hub.tool)==='rejected'?'Ask again':'Ask to list it'}}</button>
                 <button v-else class="btn sm" :disabled="hub.flagSaving||!canRegister" @click="setHubFlag('listed',false)">{{hubListing(hub.tool)==='approved'?'Unlist':'Withdraw the request'}}</button>
-                <p class="sub" style="margin:6px 0 0;max-width:70ch">Listed: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost. treg reviews each request; an approval stays when you publish a new version. Not listed: only someone with the id or the share link can call it.</p>
+                <p class="sub" style="margin:6px 0 0;max-width:70ch">Listed: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost. treg reviews each request, and each later version or price change. Not listed: only someone with the id or the share link can call it.</p>
               </div>
               <div style="margin:14px 0 4px">
                 <label class="tgl" style="font-size:13.5px"><input type="checkbox" :checked="hub.tool.public_log!==false" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @change="setHubFlag('public_log',$event.target.checked)"/><span><b>Public run log on the share page</b></span></label>
