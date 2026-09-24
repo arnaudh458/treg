@@ -80,6 +80,11 @@ optionally `data.csv`. `treg hub init <name> [--script]` writes a vendor-neutral
 `docs/hub-recipes/` holds three worked recipes, each with a matrix test: a public sheet served as a
 tool, an uploaded CSV, and `engineering-team-size`, a script ladder over three catalog tools
 (free identity resolution, CrustData's role headcount, PDL's R&D class) priced `per_call`.
+Four more, one per road, chosen from what customers call most and ask for, are live-verified but
+carry no matrix test yet: `seo-domain-snapshot` (JSON steps, `percent`), `brand-mentions` (a script
+over Reddit and routed X search that drops loose matches, `per_result`), `email-list-hygiene`
+(a script over an uploaded domain list, no tool call) and `hn-mentions` (a script over a no-key own
+tool). A JSON step's `input` is an object, so DataForSEO's array-bodied live endpoints need a script.
 
 **The manifest** (`domain/hub/manifest.py`) is validated by pure rules; every refusal is
 `ManifestError(field, rule)`, a dotted path into the file plus the rule it broke, because the
