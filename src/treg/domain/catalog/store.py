@@ -842,7 +842,9 @@ def group_routed(rows: list[dict], key=lambda r: r, max_children: int | None = N
     for r in ordered:
         v = key(r)
         cap = v["capability"]
-        if cap in routed_caps and v.get("kind") != "routed":
+        # An approved hub tool of this job stays in its group and is never cut: it is not one of
+        # the router's providers, and `catalog get <parent>` would not list it (hub-listing round 3).
+        if cap in routed_caps and v.get("kind") not in ("routed", "hub"):
             if shown.get(cap, 0) >= max_children:
                 if cap in parents:
                     parents[cap]["children_hidden"] = parents[cap].get("children_hidden", 0) + 1

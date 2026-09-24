@@ -7,7 +7,7 @@ Create Date: 2026-09-24
 One row per tool (docs/hub-listing-decisions.md round 2): state requested | approved | rejected,
 so an approval outlives a version. Expand only: `hubtool.listed` stays in the table, unread from this
 revision on (the hub was off in production, so no tool was listed there), for a later contract
-revision to drop.
+revision to drop. `capability` is the catalog job treg approved with the listing (round 3).
 """
 from collections.abc import Sequence
 
@@ -31,12 +31,15 @@ def upgrade() -> None:
         sa.Column("requested_at", sa.DateTime(), nullable=False),
         sa.Column("decided_by", sa.String(), nullable=False, server_default=""),
         sa.Column("decided_at", sa.DateTime(), nullable=True),
+        sa.Column("capability", sa.String(), nullable=False, server_default=""),
     )
     op.create_index("ix_hublisting_org_id", "hublisting", ["org_id"])
     op.create_index("ix_hublisting_state", "hublisting", ["state"])
+    op.create_index("ix_hublisting_capability", "hublisting", ["capability"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_hublisting_capability", table_name="hublisting")
     op.drop_index("ix_hublisting_state", table_name="hublisting")
     op.drop_index("ix_hublisting_org_id", table_name="hublisting")
     op.drop_table("hublisting")

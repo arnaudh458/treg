@@ -1,6 +1,7 @@
 {
   "name": "domain-authority",
   "summary": "How strong a site is in Google, in one call: authority rank, backlinks, referring domains, keywords ranked and estimated traffic, the top linking sites and keywords, and a one-word verdict.",
+  "capability": "web.backlinks.summary",
   "inputs": {
     "domain": { "type": "string", "example": "stripe.com", "note": "the site's domain, no scheme" },
     "search_engine": { "type": "string", "default": "g_us", "example": "g_us", "note": "Serpstat search database: g_us, g_uk, g_de, ... or bing_us" }

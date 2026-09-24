@@ -1,6 +1,7 @@
 {
   "name": "ai-visibility",
   "summary": "Ask ChatGPT, Gemini, Copilot and Google AI Mode one question. Per engine: did it mention your brand, cite your site, name a competitor. A judgment model decides, not a text search.",
+  "capability": "ai-search.mentions.summary",
   "inputs": {
     "prompt": {
       "type": "string",

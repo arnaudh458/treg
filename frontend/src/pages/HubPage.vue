@@ -113,6 +113,11 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
                   <b :class="{ok:hubListing(hub.tool)==='approved', warn:hubListing(hub.tool)==='rejected'}">{{hubListingWords(hub.tool)}}</b>
                   <template v-if="hubListing(hub.tool)==='rejected' && hub.tool.listing.reason"> Reason: {{hub.tool.listing.reason}}</template>
                 </p>
+                <p class="sub" style="margin:4px 0;max-width:70ch">
+                  <template v-if="hubListing(hub.tool)==='approved' && hub.tool.listing.capability">Beside the catalog providers of <code>{{hub.tool.listing.capability}}</code>: <code>catalog_get</code> on any of them shows your tool, with its success rate.</template>
+                  <template v-else-if="hub.tool.capability">Proposed job: <code>{{hub.tool.capability}}</code>. Once approved, your tool sits beside that job's providers.</template>
+                  <template v-else>No job named. Add <code>"capability"</code> to recipe.json (a capability id from <code>treg catalog search</code>) to sit beside that job's providers once approved.</template>
+                </p>
                 <button v-if="['none','rejected'].includes(hubListing(hub.tool))" class="btn sm primary" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @click="setHubFlag('listed',true)">{{hubListing(hub.tool)==='rejected'?'Ask again':'Ask to list it'}}</button>
                 <button v-else class="btn sm" :disabled="hub.flagSaving||!canRegister" @click="setHubFlag('listed',false)">{{hubListing(hub.tool)==='approved'?'Unlist':'Withdraw the request'}}</button>
                 <p class="sub" style="margin:6px 0 0;max-width:70ch">Listed: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost. treg reviews each request; an approval stays when you publish a new version. Not listed: only someone with the id or the share link can call it.</p>

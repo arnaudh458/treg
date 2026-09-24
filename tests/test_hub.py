@@ -1281,3 +1281,99 @@ async def test_a_price_edit_on_a_script_moves_its_cap(clients: AsyncClient, hub_
     token = (await funded_user(clients, "b8@example.com"))["token"]
     run = await clients.post(f"/call/{tool_id}", json={}, headers={"X-Treg-Token": token})
     assert run.status_code == 424 and "max_price_usd" in run.text      # 5 rows x $0.002 passes the new cap
+
+
+# ---------------------------------------------------------------------------------------------
+# Capability (docs/hub-listing-decisions.md round 3): the maker proposes a catalog job; the approval
+# sets it; the tool then sits beside that job's providers in catalog_get, with a seeded success rate.
+
+CAP = "tiktok.video.comments"           # EP's own job, with several catalog providers
+
+
+@pytest.mark.parametrize("bad,words", [
+    ("tiktok.nothing.here", "not a catalog capability"),
+    ("Not An Id", "catalog capability id"),
+    (5, "catalog capability id"),
+])
+def test_capability_must_be_a_catalog_job(bad, words):
+    caps = set(catalog_store.load().capabilities)
+    v = validate(_steps_manifest(capability=CAP), catalog_ids=CATALOG, own_tools=OWN, capabilities=caps)
+    assert v.manifest["capability"] == CAP
+    with pytest.raises(ManifestError) as e:
+        validate(_steps_manifest(capability=bad), catalog_ids=CATALOG, own_tools=OWN, capabilities=caps)
+    assert e.value.field == "capability" and words in e.value.rule
+
+
+def test_the_seed_gives_way_to_real_runs():
+    from treg.domain.hub import seeded_observed
+    assert seeded_observed(0, 0)["ok_rate"] == 0.9 and seeded_observed(0, 0)["estimated"] is True
+    assert seeded_observed(20, 20)["ok_rate"] == 0.98 and seeded_observed(20, 20)["estimated"] is False
+    assert seeded_observed(0, 20)["ok_rate"] == 0.18           # 20 failures outweigh the seed
+    assert seeded_observed(3, 5)["ok_rate"] == 0.75
+
+
+async def _approved_with_capability(clients, monkeypatch, capability=None):
+    monkeypatch.setattr(call_service, "relay", _fake_relay(200, b'{"data": {"domain": "figma.com"}}'))
+    await _own_supabase(clients)
+    m = _steps_manifest(steps=[{"name": "people", "call": EP, "input": {"aweme_id": "$input.domain"}}],
+                        output={"leads": "$people.data"}, price_usd=0.01, capability=CAP)
+    r = await clients.post("/hub/tools", json={"manifest": m, "check": CHECK, "readme": "x"})
+    assert r.status_code == 201 and r.json()["status"] == "live", r.text
+    tool_id = r.json()["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    return tool_id
+
+
+async def test_an_approved_capability_puts_the_tool_beside_the_providers(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    tool_id = await _approved_with_capability(clients, monkeypatch)
+    monkeypatch.setenv("TREG_ADMIN_TOKEN", ADMIN)
+    get_settings.cache_clear()
+    queue = (await clients.get("/admin/hub/listings", headers={"X-Treg-Token": ADMIN})).json()
+    assert queue[0]["proposed_capability"] == CAP and queue[0]["proposed_capability_providers"] >= 2
+    # before approval: nobody sees it beside the providers
+    sib = (await clients.get(f"/catalog/endpoints/{EP}")).json()["siblings"]
+    assert tool_id not in [s["id"] for s in sib]
+    r = await _decide(clients, monkeypatch, tool_id, "approve")
+    assert r.json()["listing"]["capability"] == CAP
+    sib = (await clients.get(f"/catalog/endpoints/{EP}")).json()["siblings"]
+    mine = [s for s in sib if s["id"] == tool_id][0]
+    assert mine["kind"] == "hub" and mine["price_line"].startswith("seller ")
+    assert mine["observed"]["ok_rate"] == 0.9 and mine["observed"]["estimated"] is True and mine["observed"]["samples"] == 0
+    # and the providers beside it, on its own page
+    got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()
+    assert got["endpoint"]["capability"] == CAP and got["endpoint"]["observed"]["estimated"] is True
+    assert EP in [s["id"] for s in got["siblings"]]
+    # a stranger's runs move the seed
+    hdr = {"X-Treg-Token": (await funded_user(clients, "cap-buyer@example.com"))["token"]}
+    for _ in range(2):
+        assert (await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=hdr)).status_code == 200
+    mine = [s for s in (await clients.get(f"/catalog/endpoints/{EP}")).json()["siblings"] if s["id"] == tool_id][0]
+    assert mine["observed"]["samples"] == 2 and mine["observed"]["ok_rate"] == round((4.5 + 2) / 7, 4)
+
+
+async def test_the_admin_can_change_or_clear_the_capability(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    tool_id = await _approved_with_capability(clients, monkeypatch)
+    monkeypatch.setenv("TREG_ADMIN_TOKEN", ADMIN)
+    get_settings.cache_clear()
+    bad = await clients.post(f"/admin/hub/listings/{tool_id}", json={"decision": "approve", "capability": "no.such.job"},
+                             headers={"X-Treg-Token": ADMIN})
+    assert bad.status_code == 422
+    r = await clients.post(f"/admin/hub/listings/{tool_id}", json={"decision": "approve", "capability": ""},
+                           headers={"X-Treg-Token": ADMIN})
+    assert r.json()["listed"] is True and r.json()["listing"]["capability"] == ""
+    assert tool_id not in [s["id"] for s in (await clients.get(f"/catalog/endpoints/{EP}")).json()["siblings"]]
+    assert (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["siblings"] == []
+    # a rejection takes it away too
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    await _decide(clients, monkeypatch, tool_id, "reject", "not yet")
+    assert tool_id not in [s["id"] for s in (await clients.get(f"/catalog/endpoints/{EP}")).json()["siblings"]]
+
+
+async def test_an_approved_tool_stays_visible_in_its_jobs_search_group(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """A routed job shows as one group, its providers capped; the hub tool of that job is in the
+    group and never cut (found live 2026-09-24: it tied the providers and fell past the cap)."""
+    from treg.domain.catalog.store import group_routed
+    rows = [{"id": "r", "kind": "routed", "capability": "c"}] + [{"id": f"p{i}", "kind": "data", "capability": "c"} for i in range(6)] \
+        + [{"id": "h", "kind": "hub", "capability": "c"}]
+    out = group_routed(rows, max_children=5)
+    assert "h" in [r["id"] for r in out] and out[0]["children_hidden"] == 1

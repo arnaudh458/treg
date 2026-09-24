@@ -20,7 +20,9 @@ export default { setup: useDashboard }
               <tr v-for="r in admHub.rows" :key="r.tool_id">
                 <td><b>{{r.tool_id}}</b><span v-if="r.version" class="muted"> v{{r.version}} · {{r.kind}}</span>
                   <div class="sub" style="margin:2px 0 0;max-width:52ch">{{r.live ? r.summary : 'no live version'}}</div>
-                  <div v-if="r.reason" class="sub" style="margin:2px 0 0">Reason: {{r.reason}}</div></td>
+                  <div v-if="r.reason" class="sub" style="margin:2px 0 0">Reason: {{r.reason}}</div>
+                  <div class="sub" style="margin:2px 0 0">Job: <input v-if="admHub.state!=='approved'" v-model="admHub.cap[r.tool_id]" :placeholder="r.proposed_capability||'none'" style="width:190px" aria-label="Capability to approve"/><code v-else>{{r.capability||'none'}}</code>
+                    <span v-if="admHub.state!=='approved' && r.proposed_capability" class="muted"> proposed: {{r.proposed_capability_description}} ({{r.proposed_capability_providers}} providers)</span></div></td>
                 <td class="muted">{{r.price_label||'-'}}</td>
                 <td class="muted">{{r.check||'-'}}</td>
                 <td class="muted">{{r.requested_by}}<br>{{(r.requested_at||'').slice(0,10)}}</td>

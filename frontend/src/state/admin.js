@@ -12,7 +12,10 @@ async loadAdminHub(state){ if(state) this.admHub={...this.admHub, state};
 async admHubDecide(r, decision){ const reason=(this.admHub.reason[r.tool_id]||'').trim();
       if(decision==='reject' && !reason){ this.err='Write the reason first: the maker reads it.'; return; }
       this.admHub={...this.admHub, busy:r.tool_id}; this.err='';
-      try{ await this.api('/admin/hub/listings/'+encodeURIComponent(r.tool_id), {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({decision, reason})}); }
+      // The job: what the admin typed, else the manifest's proposal (an empty box sends nothing).
+      const cap=(this.admHub.cap[r.tool_id]||'').trim();
+      const body={decision, reason, ...(decision==='approve' && cap ? {capability: cap==='none' ? '' : cap} : {})};
+      try{ await this.api('/admin/hub/listings/'+encodeURIComponent(r.tool_id), {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)}); }
       catch(e){ this.err='Listing decision failed: '+(e.detail&&e.detail.rule||e.detail||e.status); }
       this.admHub={...this.admHub, busy:null}; await this.loadAdminHub(); },
 async _adm(path, method, body){ this.adminBusy=true; this.err='';

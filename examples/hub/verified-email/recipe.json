@@ -1,6 +1,7 @@
 {
   "name": "verified-email",
   "summary": "One person's work email, found and then checked, in one call. Give a LinkedIn URL or a name and a domain. Provider calls at cost, plus $0.01 only when the email is valid or risky.",
+  "capability": "people.email.find",
   "inputs": {
     "linkedin_url": { "type": "string", "default": "", "example": "https://www.linkedin.com/in/patrickcollison", "note": "the person's LinkedIn profile; the best identity when you have it" },
     "full_name": { "type": "string", "default": "", "example": "Patrick Collison", "note": "with domain, when you have no LinkedIn URL" },

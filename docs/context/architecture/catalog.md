@@ -1634,7 +1634,8 @@ and the CLI so the three surfaces cannot disagree:
   `people.search` is "lead lists and prospects (sales leads)" — not to bend the scorer; `aliases.yaml`
   then only needs `lead → leads`, `prospect → leads, prospects`.
 - **A group shows its best `MAX_ROUTED_CHILDREN` (5) children.** One capability's 24 providers had
-  eaten the whole 25-row page. The parent is stamped `children_hidden`; the CLI prints
+  eaten the whole 25-row page. An approved hub tool of the same job (`kind: "hub"`) sits in the
+  group but is never cut: the router does not list it. The parent is stamped `children_hidden`; the CLI prints
   `+ N more providers — treg catalog get <parent>`, MCP says so in `routed`. To keep the page full
   after collapsing, search ranks a band of 4× the page (≤ 100) and cuts to `limit` AFTER grouping.
 

@@ -304,6 +304,15 @@ bump; a script's amounts change only with a new version of run.js.
   maker reads in `treg hub list`, `/hub/tools/mine` (`listing: {state, reason}`) and the dashboard's
   Listing tab. The dashboard's Admin page carries the queue. `listed` in the maker's view is true
   only when approved; another team's view of a tool never carries the request.
+- **Capability** (round 3): an optional manifest `capability`, a catalog capability id (checked at
+  publish against `cat.capabilities`), is only a proposal. The approval sets `HubListing.capability`
+  (the admin may change it, or clear it with `""`; a rejection clears it). An approved job adds
+  the tool to `catalog_get`'s `siblings` for every provider of that job (`capability_siblings`),
+  gives the tool's own `catalog_get` those providers as siblings, and joins its capability words to
+  its search score (`W_CAPABILITY`, like a provider row). Its `observed.ok_rate` is seeded
+  (`seeded_observed`: 90% counted as 5 runs, blended with the last 30 days of runs by other teams,
+  `estimated` under 20 runs), because a new tool has nothing to compare. It is never a routed child:
+  an agent compares and picks (non-negotiable 4).
 - **The public share page** `GET /hub/<id>` (and `.md`; `@N`): the contract for a person or an
   agent on the public stylesheet; the price as the mode and the worst case ("seller $X per unit,
   up to $Y per run"; the schema.org Offer carries the worst case); the RUN LOG when the maker left

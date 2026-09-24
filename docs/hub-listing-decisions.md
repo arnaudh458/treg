@@ -46,3 +46,18 @@ admin can take an approval back (a rejection with a reason). So the state is its
 **3. Why approval.** At the start the hub serves a few teams; a weak tool in search costs every
 caller who picks it. Review keeps search worth trusting until run evidence can do that job.
 
+## Round 3 — capability: the tool beside the providers of its job (2026-09-24, owner + Jason)
+
+**1. The maker names the job; treg approves it.** `"capability"` in recipe.json is a catalog
+capability id. It is a proposal: it takes effect with the listing approval, and the admin may
+change or clear it.
+
+**2. Beside, never instead.** An approved job puts the tool in `catalog_get`'s siblings for every
+provider of that job, and those providers beside it on its own page. treg does not route to it; the
+agent compares and picks.
+
+**3. A seed, because a new tool has no runs.** Its success rate starts at 90%, counted as 5 runs,
+and runs by other teams move it; after about 20 the seed barely counts. Until then the number is
+marked `estimated`. The owner chose a seed over hiding new tools: hidden, a tool never gets the runs
+that would prove it.
+

@@ -276,6 +276,9 @@ callable at once by id, `<team-slug>.<name>`, from any agent with a treg token. 
 search: you share the id or the page `{BASE}/hub/<id>`. Ask for a place in search with `treg hub list <id>`:
 once treg approves the request it appears in `catalog_search` too, marked `kind: "hub"`, ranked by
 relevance like any endpoint (`treg hub ls` shows where the request stands, and a rejection's reason).
+Name the job in recipe.json, `"capability": "people.email.find"` (a capability id from
+`treg catalog search`): once approved, `catalog_get` on any provider of that job lists your tool
+beside them, with a success rate that starts at an estimate and follows real runs.
 
 **First, check this registry HAS the hub.** It is a per-deployment switch, and it is off by default.
 When it is off every `/hub/...` route answers `404` and every `treg hub` command refuses. That is

@@ -1334,6 +1334,9 @@ class HubListing(SQLModel, table=True):
     requested_at: datetime = Field(default_factory=_now)
     decided_by: str = Field(default="")              # the superadmin's email
     decided_at: datetime | None = Field(default=None)
+    # The catalog job treg approved for it (round 3): the tool then sits beside that job's providers
+    # in catalog_get. "" = in search, but beside nobody. Set only by an approval.
+    capability: str = Field(default="", index=True)
 
 
 class HubRun(SQLModel, table=True):

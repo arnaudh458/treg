@@ -43,7 +43,7 @@ STEP_KEYS = frozenset({"name", "call", "method", "input", "for_each", "as", "ski
 LIMIT_KEYS = frozenset({"steps", "wall_s", "cost_usd"})
 MANIFEST_KEYS = frozenset({
     "name", "version", "summary", "writes", "inputs", "uses", "limits", "price_usd", "pricing",
-    "steps", "script", "output",
+    "steps", "script", "output", "capability",
 })
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,39}$")        # the tool's name: `leads-db`
@@ -72,7 +72,7 @@ class Validated:
     inputs: dict[str, dict[str, Any]]
     uses: list[str]
     limits: dict[str, Any]    # steps, wall_s, cost_usd (cost_usd may be None)
-    price_micro: int          # the flat reserve price; 0 for per_unit and cost_plus
+    price_micro: int          # a recipe's fixed price; 0 for a script
     pricing: dict[str, Any]   # the runner's micro view: mode, price_micro, max_charge_micro
     steps: list[dict[str, Any]] | None
     script: str | None
@@ -98,9 +98,11 @@ def validate(
     catalog_ids: set[str],
     own_tools: set[str],
     hub_ids: frozenset[str] | set[str] = frozenset(),
+    capabilities: frozenset[str] | set[str] | None = None,
 ) -> Validated:
     """Validate one manifest. `catalog_ids` and `own_tools` are the two universes `uses` may
-    name; `hub_ids` are refused by name (a hub tool may not use a hub tool, depth one)."""
+    name; `hub_ids` are refused by name (a hub tool may not use a hub tool, depth one).
+    `capabilities` is the catalog's job list an optional `capability` must name (None: not checked)."""
     if not isinstance(raw, dict):
         raise _fail("manifest", "must be a JSON object")
     unknown = sorted(set(raw) - MANIFEST_KEYS)
@@ -148,13 +150,23 @@ def validate(
         output_fields = set(output)
 
     pricing_public, pricing_micro = _validate_pricing(raw, is_script=has_script)
+    # The job this tool does, in the catalog's words (docs/hub-listing-decisions.md round 3): only a
+    # proposal. It takes effect when treg approves the listing, which puts the tool beside the
+    # catalog providers of that job.
+    capability = raw.get("capability")
+    if capability is not None:
+        if not isinstance(capability, str) or not _CATALOG_ID_RE.match(capability):
+            raise _fail("capability", "a catalog capability id, like \"people.email.find\" (treg catalog search shows them)")
+        if capabilities is not None and capability not in capabilities:
+            raise _fail("capability", f"{capability!r} is not a catalog capability; pick the job your tool does from "
+                        "`treg catalog search` results (their `capability` field)")
     price_micro = pricing_micro["price_micro"]
 
     manifest = {
         "name": name, "summary": summary, "writes": writes, "inputs": inputs, "uses": uses,
         "limits": limits, **({} if has_script else {"price_usd": price_micro / 1_000_000}), "pricing": pricing_public,
         **({"steps": steps} if steps is not None else {"script": script}),
-        "output": output,
+        "output": output, **({"capability": capability} if capability else {}),
     }
     return Validated(name=name, kind=kind, summary=summary, writes=writes, inputs=inputs,
                      uses=uses, limits=limits, price_micro=price_micro, pricing=pricing_micro,
@@ -541,3 +553,21 @@ def validate_readme(raw: Any) -> str:
     if len(raw) > MAX_README:
         raise _fail("readme", f"at most {MAX_README} characters")
     return raw
+
+
+# A hub tool beside catalog providers needs a success rate to compare, and a new one has no runs
+# (docs/hub-listing-decisions.md round 3). It starts at SEED_OK_RATE counted as SEED_RUNS runs; each
+# run by another team moves it, so after ~20 real runs the seed barely counts. Until then the number
+# is marked `estimated`.
+SEED_OK_RATE = 0.9
+SEED_RUNS = 5
+ESTIMATED_UNDER = 20
+
+
+def seeded_observed(ok: int, runs: int) -> dict[str, Any]:
+    """The `observed` block of a hub tool shown beside providers: the seeded success rate, the
+    real run count, and whether the number is still mostly the seed."""
+    rate = (SEED_OK_RATE * SEED_RUNS + ok) / (SEED_RUNS + runs)
+    return {"samples": runs, "decided": runs, "ok_rate": round(rate, 4), "estimated": runs < ESTIMATED_UNDER,
+            "seed": {"ok_rate": SEED_OK_RATE, "runs": SEED_RUNS}}
+

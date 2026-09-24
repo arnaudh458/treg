@@ -1,6 +1,7 @@
 {
   "name": "lead-pipeline",
   "summary": "The people at a company, each with a checked work email, in one call. Provider calls at cost, plus $0.01 only per person whose email is valid or risky.",
+  "capability": "people.employees.search",
   "inputs": {
     "company_domain": {
       "type": "string",

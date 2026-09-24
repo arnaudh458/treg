@@ -333,7 +333,7 @@ async def catalog_endpoint(
         # A hub tool (a maker's tool made of tools) answers here too, so an agent that holds the
         # id reads its contract the same way it reads a catalog endpoint. Unlisted: never in
         # search, only by id. Flag off ⇒ the branch does not exist.
-        hub_view = await _hub_endpoint_view(endpoint_id, db)
+        hub_view = await _hub_endpoint_view(endpoint_id, db, observations)
         if hub_view is not None:
             return hub_view
         # Name the near misses. An id that is one segment off is the common miss, and a bare 404
@@ -364,6 +364,11 @@ async def catalog_endpoint(
     overflow = await _overflow_disclosure(ep, cat)
     view = view | {"observed": stats.get(endpoint_id)} | overflow
     siblings = [s | {"observed": stats.get(s["id"])} for s in siblings]
+    # Hub tools treg approved for this job sit beside its providers (docs/hub-listing-decisions.md
+    # round 3), with a seeded success rate while they are new. Shown for comparison only: they are
+    # never a routed child (AGENTS.md non-negotiable 4).
+    from ..application import hub as hub_app
+    siblings += await hub_app.capability_siblings(db, ep.get("capability") or "")
 
     routing = None
     if ep.get("kind") == "routed":
@@ -426,7 +431,8 @@ async def catalog_example(endpoint_id: str) -> Response:
     return Response(content=path.read_bytes(), media_type="application/json")
 
 
-async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
+async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession,
+                             observations: endpoint_stats.EndpointObservationReader | None = None) -> dict | None:
     """The public contract of one hub tool, in the shape `treg catalog get` and `catalog_get`
     already print: `endpoint` (with `kind: "hub"`), `provider` (the maker's team). Hides the
     script, the maker's tools and every key (docs/HUB-DECISIONS.md round 4 q4, round 5 q7)."""
@@ -448,6 +454,18 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
                if "example" in v or "default" in v}
     example = {k: v for k, v in example.items() if v not in ("", None, 0)}
     rng = (await hub_app.price_ranges(db, {row.tool_id: m})).get(row.tool_id)
+    # An approved job puts the tool beside that job's providers, and them beside it: the same
+    # comparison catalog_get gives a provider row (round 3). Its own numbers carry the seed.
+    capability = await hub_app.approved_capability(db, row.tool_id)
+    cat = catalog_store.load()
+    siblings = [catalog_store.endpoint_view(o, _provider_display(o["provider"]), cat)
+                for o in sorted(cat.for_capability(capability), key=lambda e: e["id"])] if capability else []
+    if siblings and observations is not None:
+        stats = await _observed_or_empty(observations, [s["id"] for s in siblings])
+        siblings = [s | {"observed": stats.get(s["id"])} for s in siblings]
+    siblings += await hub_app.capability_siblings(db, capability, exclude=row.tool_id)
+    mine = next(iter(await hub_app.capability_siblings(db, capability) if capability else []), None)
+    mine = mine if mine and mine["id"] == row.tool_id else None
     return {
         "endpoint": {
             "id": row.tool_id, "kind": "hub", "hub": True, "version": row.version,
@@ -474,7 +492,10 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession) -> dict | None:
             },
             "page": f"{base}/hub/{row.tool_id}",
             "readme": row.readme,
+            "capability": capability or None,
+            "capability_description": cat.capabilities.get(capability, "") if capability else "",
+            **({"observed": mine["observed"]} if mine else {}),
         },
         "provider": {"display_name": org.slug if org else "", "kind": "hub maker"},
-        "siblings": [],
+        "siblings": siblings,
     }

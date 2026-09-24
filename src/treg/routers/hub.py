@@ -436,6 +436,8 @@ class ListingDecisionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     decision: str = Field(pattern="^(approve|reject)$")
     reason: str = Field(default="", max_length=500)
+    # On approve: the catalog job it sits beside. Omitted = the one its manifest proposes; "" = none.
+    capability: str | None = Field(default=None, max_length=200)
 
 
 @app.get("/admin/hub/listings")
@@ -454,15 +456,18 @@ async def admin_hub_listing_decide(
     tool_id: str, body: ListingDecisionIn, admin: str = Depends(require_superadmin),
     db: AsyncSession = Depends(get_admin_session),
 ) -> dict:
-    """Approve (the tool enters search) or reject (it leaves search; the maker reads the reason).
-    A rejection needs a reason: the maker has to know what to fix."""
+    """Approve (the tool enters search, beside the providers of its capability) or reject (it leaves
+    search; the maker reads the reason). A rejection needs a reason: the maker has to know what to fix."""
     if not hub_app.enabled():
         raise HTTPException(status_code=404, detail="Not Found")
     if body.decision == "reject" and not body.reason.strip():
         raise HTTPException(status_code=422, detail={"error": "reason_required",
                                                      "rule": "say why, in words the maker can act on"})
-    lst = await hub_app.decide_listing(db, tool_id=tool_id, approve=body.decision == "approve",
-                                       reason=body.reason, admin_email=admin)
+    try:
+        lst = await hub_app.decide_listing(db, tool_id=tool_id, approve=body.decision == "approve",
+                                           reason=body.reason, admin_email=admin, capability=body.capability)
+    except ManifestError as exc:
+        raise HTTPException(status_code=422, detail={"error": "capability_invalid", "field": exc.field, "rule": exc.rule}) from None
     if lst is None:
         raise HTTPException(status_code=404, detail=f"no listing request for {tool_id!r}")
     await db.commit()

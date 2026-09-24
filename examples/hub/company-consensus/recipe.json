@@ -1,6 +1,7 @@
 {
   "name": "company-consensus",
   "summary": "One company's details from two independent sources, and whether they agree, field by field. Routing gives one answer; this gives a second opinion and a confidence score.",
+  "capability": "companies.enrich",
   "inputs": {
     "domain": {
       "type": "string",

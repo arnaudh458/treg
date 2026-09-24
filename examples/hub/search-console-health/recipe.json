@@ -1,6 +1,7 @@
 {
   "name": "search-console-health",
   "summary": "A Search Console property's health on your own Google account: clicks and impressions now against the 28 days before, top queries and pages, sitemap errors, home page index status, plain findings.",
+  "capability": "search-console.performance",
   "inputs": {
     "site": {
       "type": "string",

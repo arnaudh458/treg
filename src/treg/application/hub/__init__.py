@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
-from ...domain.hub import ManifestError, price_label, stored_pricing, validate, validate_check, validate_readme
+from ...domain.hub import (ManifestError, price_label, seeded_observed, stored_pricing, validate, validate_check,
+                           validate_readme)
 from ...models import HubListing, HubTool, Org, Tool
 
 HUB_ID_MIN_PARTS = 2
@@ -147,7 +148,7 @@ async def publish(
     hub_ids = {
         tid for (tid,) in (await db.execute(select(HubTool.tool_id).distinct())).all()
     }
-    v = validate(manifest, catalog_ids=set(catalog_store.load().by_id),
+    v = validate(manifest, catalog_ids=set(catalog_store.load().by_id), capabilities=set(catalog_store.load().capabilities),
                  own_tools=own_tools, hub_ids=hub_ids)
     if v.kind == "script":
         if not isinstance(script, str) or not script.strip():
@@ -281,7 +282,7 @@ def listing_view(listing: HubListing | None) -> dict[str, Any]:
     if listing is None:
         return {"listed": False, "listing": {"state": "none"}}
     return {"listed": listing.state == "approved",
-            "listing": {"state": listing.state, "reason": listing.reason,
+            "listing": {"state": listing.state, "reason": listing.reason, "capability": listing.capability,
                         "requested_at": listing.requested_at.isoformat(),
                         "decided_at": listing.decided_at.isoformat() if listing.decided_at else None}}
 
@@ -303,6 +304,7 @@ def view(row: HubTool, listing: HubListing | None = None) -> dict[str, Any]:
         **listing_view(listing), "public_log": bool(row.public_log),
         "price_label": price_label(row.manifest),
         "uses": row.manifest.get("uses", []), "inputs": row.manifest.get("inputs", {}),
+        "capability": row.manifest.get("capability"),
         "output": row.manifest.get("output", {}), "limits": row.manifest.get("limits", {}),
         "created_by": row.created_by, "created_at": row.created_at.isoformat(),
         "check_result": row.check_result,
@@ -317,7 +319,7 @@ async def transient(db: AsyncSession, *, org: Org, maker_email: str,
     folder from the maker's machine. Version 0 marks it in every trace."""
     own_tools = {name for (name,) in (await db.execute(select(Tool.name).where(Tool.org_id == org.id))).all()}
     hub_ids = {tid for (tid,) in (await db.execute(select(HubTool.tool_id).distinct())).all()}
-    v = validate(manifest, catalog_ids=set(catalog_store.load().by_id), own_tools=own_tools, hub_ids=hub_ids)
+    v = validate(manifest, catalog_ids=set(catalog_store.load().by_id), capabilities=set(catalog_store.load().capabilities), own_tools=own_tools, hub_ids=hub_ids)
     if v.kind == "script" and not (isinstance(script, str) and script.strip()):
         raise ManifestError("script", "the manifest names run.js; send its contents as `script`")
     output_fields = (v.output["fields"] if v.kind == "script" else list(v.output))
@@ -383,6 +385,8 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
         select(HubTool).join(HubListing, HubListing.tool_id == HubTool.tool_id)
         .where(HubListing.state == "approved", HubTool.status == "live")
         .order_by(HubTool.tool_id, HubTool.version.desc()))).scalars().all()
+    caps = {r.tool_id: r.capability for r in (await db.execute(
+        select(HubListing).where(HubListing.state == "approved"))).scalars().all()}
     newest: dict[str, HubTool] = {}
     for r in rows:
         newest.setdefault(r.tool_id, r)
@@ -408,7 +412,8 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
         ep = {
             "id": tid, "kind": "hub", "hub": True, "version": r.version,
             "name": r.name, "summary": r.summary, "provider": slug, "provider_display": slug,
-            "capability": None, "capability_description": "", "platform": "", "tier": "core", "verified": True,
+            "capability": caps.get(tid) or None, "capability_description": cat.capabilities.get(caps.get(tid) or "", ""),
+            "platform": "", "tier": "core", "verified": True,
             "method": "POST", "path": f"/call/{tid}", "writes": r.writes,
             "cost": {"type": "per_success", "usd": worst, "currency": "USD", "unit": "run"},
             "price_line": "seller " + price_label(m) + " + provider fees", "price_label": price_label(m),
@@ -417,6 +422,8 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
         }
         fields = [(catalog_store.W_SUMMARY, f"{r.name} {r.summary}".lower()),
                   (catalog_store.W_PATH, f"{tid} {slug}".lower())]
+        if caps.get(tid):          # an approved job speaks the catalog's own words, like a provider's row
+            fields.append((catalog_store.W_CAPABILITY, f"{caps[tid]} {cat.capabilities.get(caps[tid], '')}".lower()))
         extra.append((ep, fields))
     scored = catalog_store.score_extra(query, cat, extra)
     stats = {tid: {"ok_rate": (a[1] / a[0]) if a[0] else None, "samples": a[0]} for tid, a in agg.items()}
@@ -462,7 +469,12 @@ async def pending_listings(db: AsyncSession, state: str = "requested") -> list[d
     for lst in rows:
         tool = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id, HubTool.status == "live")
                                  .order_by(HubTool.version.desc()).limit(1))).scalars().first()
+        proposed = (tool.manifest.get("capability") or "") if tool else ""
+        cat = catalog_store.load()
         out.append({"tool_id": lst.tool_id, "state": lst.state, "reason": lst.reason,
+                    "capability": lst.capability, "proposed_capability": proposed,
+                    "proposed_capability_description": cat.capabilities.get(proposed, ""),
+                    "proposed_capability_providers": len(cat.for_capability(proposed)) if proposed else 0,
                     "requested_by": lst.requested_by, "requested_at": lst.requested_at.isoformat(),
                     "decided_by": lst.decided_by,
                     "decided_at": lst.decided_at.isoformat() if lst.decided_at else None,
@@ -474,15 +486,82 @@ async def pending_listings(db: AsyncSession, state: str = "requested") -> list[d
 
 
 async def decide_listing(db: AsyncSession, *, tool_id: str, approve: bool, reason: str,
-                         admin_email: str) -> HubListing | None:
+                         admin_email: str, capability: str | None = None) -> HubListing | None:
     """A superadmin's decision on a tool's listing: approve puts it in search, reject takes it out
-    (a first answer, or an approval taken back) with a reason the maker reads. None when the tool
-    has no listing row (it never asked, or the maker unlisted it). Does not commit."""
+    (a first answer, or an approval taken back) with a reason the maker reads. An approval also
+    sets the catalog job the tool sits beside: `capability` when given ("" = none), else the one the
+    newest live manifest proposes. None when the tool has no listing row (it never asked, or the
+    maker unlisted it). Raises ManifestError for a capability the catalog does not have. Does not
+    commit."""
     from ...timeutil import utcnow_naive
     lst = await db.get(HubListing, tool_id)
     if lst is None:
         return None
+    if approve:
+        if capability is None:
+            tool = (await db.execute(select(HubTool).where(HubTool.tool_id == tool_id, HubTool.status == "live")
+                                     .order_by(HubTool.version.desc()).limit(1))).scalars().first()
+            capability = (tool.manifest.get("capability") or "") if tool else ""
+        if capability and capability not in catalog_store.load().capabilities:
+            raise ManifestError("capability", f"{capability!r} is not a catalog capability")
+        lst.capability = capability
+    else:
+        lst.capability = ""
     lst.state, lst.reason = ("approved", "") if approve else ("rejected", reason.strip()[:500])
     lst.decided_by, lst.decided_at = admin_email, utcnow_naive()
     db.add(lst)
     return lst
+
+
+async def capability_siblings(db: AsyncSession, capability: str, *, exclude: str = "") -> list[dict[str, Any]]:
+    """The approved, live hub tools that do `capability`, as the sibling rows catalog_get shows
+    beside that job's providers (docs/hub-listing-decisions.md round 3). Each carries the public
+    contract's price and a seeded `observed` (`seeded_observed`), from runs by other teams in the
+    last 30 days. Never routed to: an agent compares and picks (AGENTS.md non-negotiable 4)."""
+    if not enabled() or not capability:
+        return []
+    from datetime import timedelta
+    from ...models import HubRun
+    from ...timeutil import utcnow_naive
+    ids = [t for (t,) in (await db.execute(select(HubListing.tool_id).where(
+        HubListing.state == "approved", HubListing.capability == capability))).all() if t != exclude]
+    if not ids:
+        return []
+    rows = (await db.execute(select(HubTool).where(HubTool.tool_id.in_(ids), HubTool.status == "live")
+                             .order_by(HubTool.tool_id, HubTool.version.desc()))).scalars().all()
+    newest: dict[str, HubTool] = {}
+    for r in rows:
+        newest.setdefault(r.tool_id, r)
+    if not newest:
+        return []
+    slugs = {o.id: o.slug for o in (await db.execute(
+        select(Org).where(Org.id.in_({r.org_id for r in newest.values()})))).scalars().all()}
+    agg: dict[str, list[int]] = {}
+    for tid, status in (await db.execute(
+            select(HubRun.tool_id, HubRun.status).where(
+                HubRun.tool_id.in_(list(newest)), HubRun.version > 0,
+                HubRun.started_at >= utcnow_naive() - timedelta(days=30),
+                HubRun.caller_org_id != HubRun.maker_org_id))).all():
+        a = agg.setdefault(tid, [0, 0])
+        a[0] += 1
+        a[1] += 1 if status == "ok" else 0
+    ranges = await price_ranges(db, {tid: r.manifest for tid, r in newest.items()})
+    out = []
+    for tid, r in newest.items():
+        slug = slugs.get(r.org_id, "")
+        runs, ok = agg.get(tid, [0, 0])
+        out.append({"id": tid, "kind": "hub", "hub": True, "provider": slug, "provider_display": slug,
+                    "name": r.name, "summary": r.summary, "capability": capability, "method": "POST",
+                    "path": f"/call/{tid}",
+                    "cost": {"type": "per_success", "usd": worst_usd(r.manifest, r.price_micro, ranges.get(tid)),
+                             "currency": "USD", "unit": "run"},
+                    "price_line": "seller " + price_label(r.manifest) + " + provider fees",
+                    **with_range(r.manifest, ranges.get(tid)),
+                    "observed": seeded_observed(ok, runs)})
+    return out
+
+
+async def approved_capability(db: AsyncSession, tool_id: str) -> str:
+    lst = await db.get(HubListing, tool_id)
+    return lst.capability if lst is not None and lst.state == "approved" else ""
+

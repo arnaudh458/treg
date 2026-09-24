@@ -508,7 +508,10 @@ treg hub log <id> --public on|off           show or hide the run log on the shar
 approves it, the tool is in `treg catalog search` and `catalog_search`, marked `hub` with your team,
 the price label and the 30-day success rate, ranked by relevance with no boost. A rejection comes
 with a reason (`treg hub ls`, and the dashboard's Listing tab); listing again asks again. An
-approval belongs to the tool and stays across new versions; `unlist` withdraws it. Unlisted,
+approval belongs to the tool and stays across new versions; `unlist` withdraws it. Add
+`"capability": "<a catalog capability id>"` to recipe.json to name the job your tool does: once
+approved, `treg catalog get` on any provider of that job shows your tool beside them. A new tool's
+success rate starts at 90%, counted as 5 runs, and real runs by other teams replace that estimate. Unlisted,
 unapproved, failed and retired tools never appear. The share page's run log shows the last 20 runs and runs per
 day for 30 days: time, outcome, duration, steps, units and the price paid, and never who called,
 the inputs, or the output. The dashboard has the same two switches under Hub → a tool → Listing.
