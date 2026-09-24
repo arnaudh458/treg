@@ -130,15 +130,30 @@ async def _resolve_org(ref: str, db: AsyncSession) -> Org | None:
     return await db.get(Org, int(ref)) if (ref.isdigit() and int(ref) < 2**63) else None
 
 
+def _bearer_token(authorization: str) -> str:
+    """Extract a token from an Authorization header if it's a Bearer scheme."""
+    if not authorization:
+        return ""
+    # Case-insensitive scheme per RFC 7235, trimmed
+    raw = authorization.strip()
+    for prefix in ("Bearer ", "bearer ", "BEARER "):
+        if raw.startswith(prefix):
+            return raw[len(prefix):].strip()
+    return ""
+
+
 async def require_identity(
     x_treg_token: str = Header(default=""),
+    authorization: str = Header(default=""),
     x_treg_org: str = Header(default=""),
     treg_session: str = Cookie(default=""),
     db: AsyncSession = Depends(get_session),
 ) -> User:
     """Just *who* the caller is (no org): a token's user, or a session user. 401 otherwise."""
-    if x_treg_token:
-        m, key = await _membership_and_key_by_token(x_treg_token, db)
+    # X-Treg-Token wins; fall back to Authorization: Bearer if absent.
+    token = x_treg_token or _bearer_token(authorization)
+    if token:
+        m, key = await _membership_and_key_by_token(token, db)
         if m is not None:
             # A published public-demo token must never act as a USER — user-level endpoints mint
             # identity tokens (/auth/cli-token), create real orgs, and accept invites, all of which
@@ -147,7 +162,7 @@ async def require_identity(
             if org is not None and org.public_demo and not _role_at_least(m.role, "admin"):
                 raise HTTPException(status_code=403, detail=(
                     "this is a public demo token — it can only call the demo team's tools"))
-        user = await db.get(User, m.user_id) if m else await _user_from_identity_token(x_treg_token, db)
+        user = await db.get(User, m.user_id) if m else await _user_from_identity_token(token, db)
         # A machine token must never act as a USER. `create_org` depends on THIS dependency, so an
         # agent could otherwise create a fresh org in which it is the OWNER — and owners are exempt
         # from `_require_tool_access` and `_require_local_run`, escaping every limit set on it.
@@ -156,7 +171,7 @@ async def require_identity(
                 "this token belongs to a machine identity — it can call this team's tools, "
                 "but cannot act as a user"))
         if user is not None and not user.suspended:
-            claims = sess.read_identity_claims(x_treg_token)
+            claims = sess.read_identity_claims(token)
             oauth_bridge = bool(
                 claims
                 and claims.get("aud") == sess.IDENTITY_AUDIENCE
@@ -211,6 +226,7 @@ async def _user_from_identity_token(token: str, db: AsyncSession) -> User | None
 async def require_member(
     request: Request,
     x_treg_token: str = Header(default=""),
+    authorization: str = Header(default=""),
     x_treg_org: str = Header(default=""),
     treg_session: str = Cookie(default=""),
     db: AsyncSession = Depends(get_session),
@@ -219,21 +235,23 @@ async def require_member(
     - **token** (agents/CLI): the token IS a membership, so the org is baked in.
     - **session** (dashboard): the cookie identifies the user; the org is chosen via `X-Treg-Org`.
     """
+    # X-Treg-Token wins; fall back to Authorization: Bearer if absent.
+    token = x_treg_token or _bearer_token(authorization)
     membership, api_key = (
-        await _membership_and_key_by_token(x_treg_token, db)
-        if x_treg_token else (None, None)
+        await _membership_and_key_by_token(token, db)
+        if token else (None, None)
     )
     if membership is not None:  # per-org token — the org is baked in
         user = await db.get(User, membership.user_id)
         org = await db.get(Org, membership.org_id)
     else:
         # identity token (CLI `treg login`) or a browser session — pick the org via X-Treg-Org
-        user = (await _user_from_identity_token(x_treg_token, db)) if x_treg_token else await _user_from_session(treg_session, db)
-        if user is None and x_treg_token:
+        user = (await _user_from_identity_token(token, db)) if token else await _user_from_session(treg_session, db)
+        if user is None and token:
             # Hash-backed membership tokens reached the explicit suspended-user guard below. Keep
             # that 403 contract when a new signed Default token identifies the same suspended user;
             # a token-version mismatch remains an ordinary invalid-token 401.
-            suspended_claims = sess.read_identity_claims(x_treg_token)
+            suspended_claims = sess.read_identity_claims(token)
             suspended_user = (
                 await db.get(User, suspended_claims["uid"])
                 if suspended_claims is not None else None
@@ -245,12 +263,12 @@ async def require_member(
             ):
                 raise HTTPException(status_code=403, detail="account suspended")
         if user is None:
-            raise HTTPException(status_code=401, detail="invalid token" if x_treg_token else "not authenticated")
+            raise HTTPException(status_code=401, detail="invalid token" if token else "not authenticated")
         # A team-pinned identity token (org baked into its claim) resolves as a BARE bearer where no
         # header can travel — an MCP server's Authorization. New typed Default keys make that claim
         # authoritative. The header-first rule survives only for untyped credentials minted before
         # scopes shipped, keeping a rolling deploy from revoking existing CLI/MCP installations.
-        identity_claims = sess.read_identity_claims(x_treg_token) if x_treg_token else None
+        identity_claims = sess.read_identity_claims(token) if token else None
         if (identity_claims or {}).get("scope") == sess.BOOTSTRAP_SCOPE:
             raise HTTPException(status_code=403, detail=(
                 "finish team setup first — this temporary login token cannot access team resources"))
@@ -273,7 +291,7 @@ async def require_member(
         if org is None:
             # A team-pinned Default token whose team was deleted is no longer a valid credential.
             # Keep the ordinary 400 for callers that simply omitted or mistyped their team header.
-            if x_treg_token and not x_treg_org and (identity_claims or {}).get("org"):
+            if token and not x_treg_org and (identity_claims or {}).get("org"):
                 raise HTTPException(status_code=401, detail="invalid token")
             raise HTTPException(status_code=400, detail="choose an org (send X-Treg-Org)")
         membership = (
@@ -285,7 +303,7 @@ async def require_member(
             # Membership removal revokes and detaches its keys for audit. A signed Default token has
             # no hash to find, so consult that retained control row before answering as though this
             # identity had never belonged to the team.
-            if x_treg_token and identity_claims and identity_claims.get("org") in (org.slug, org.previous_slug):
+            if token and identity_claims and identity_claims.get("org") in (org.slug, org.previous_slug):
                 retained_default = (await db.execute(select(ApiKey).where(
                     ApiKey.org_id == org.id,
                     ApiKey.membership_id.is_(None),
@@ -302,7 +320,7 @@ async def require_member(
             and claims.get("aud") == sess.IDENTITY_AUDIENCE
             and claims.get("exp") is not None
         )
-        if x_treg_token and not oauth_bridge:
+        if token and not oauth_bridge:
             api_key = await managed_keys.ensure_default_key(db, membership, user)
             _require_active_key(api_key)
             # Only team-pinned signed credentials are dashboard Default keys. Org-less login and
@@ -330,6 +348,7 @@ async def require_member(
 
 async def require_superadmin(
     x_treg_token: str = Header(default=""),
+    authorization: str = Header(default=""),
     treg_session: str = Cookie(default=""),
     db: AsyncSession = Depends(get_admin_session),
 ) -> str:
@@ -339,20 +358,22 @@ async def require_superadmin(
     On the admin pool, and it must name the same dependency callable its handlers do — FastAPI
     caches dependencies per request by identity, so a gate on `get_session` would put admin traffic
     back on the API pool through the back door."""
+    # X-Treg-Token wins; fall back to Authorization: Bearer if absent.
+    token = x_treg_token or _bearer_token(authorization)
     admin = get_settings().admin_token
-    if x_treg_token and admin and hmac.compare_digest(x_treg_token, admin):
+    if token and admin and hmac.compare_digest(token, admin):
         await db.commit()
         return "env-admin"
     user: User | None = None
-    if x_treg_token:
-        m, _ = await _membership_and_key_by_token(x_treg_token, db)
-        user = await db.get(User, m.user_id) if m else await _user_from_identity_token(x_treg_token, db)
+    if token:
+        m, _ = await _membership_and_key_by_token(token, db)
+        user = await db.get(User, m.user_id) if m else await _user_from_identity_token(token, db)
     else:
         user = await _user_from_session(treg_session, db)
     if user is not None and user.is_superadmin and not user.suspended:
         await db.commit()
         return user.email
-    if not x_treg_token and not treg_session:  # nothing presented → not authenticated
+    if not token and not treg_session:  # nothing presented → not authenticated
         raise HTTPException(status_code=401, detail="not authenticated")
     raise HTTPException(status_code=403, detail="super-admin required")
 

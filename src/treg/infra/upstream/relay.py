@@ -51,8 +51,13 @@ _HOP_BY_HOP = frozenset(
 # enumeration silently failed. `x-treg-client` was never listed, so every provider we relay to has been
 # receiving the caller's runtime name; `x-treg-meta` would have leaked a builder's customer ids the same
 # way. A prefix is the only form of this rule that stays correct when the next header is added.
+#
+# `authorization` is stripped so a treg token sent as `Authorization: Bearer <token>` never leaks
+# upstream. Tools that need an Authorization header inject it via their own credential binding, so the
+# caller's header is never the one that should reach the provider.
 _CONTROL = frozenset(
     {
+        "authorization",
         "ngrok-skip-browser-warning",
         "x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-port",
         "x-real-ip", "forwarded", "via",
