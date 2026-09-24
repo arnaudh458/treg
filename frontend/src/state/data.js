@@ -109,6 +109,7 @@ export default function data(){
       welcome:{on:false, step:0, name:'', agent:'openclaw', moreOpen:false, busy:false, err:''},  // first-run: name your team → pick your agent → setup line
       emptyTab:'agent',
       tools:[], health:{}, calls:[], runs:[], adminStats:null, adminOrgs:[], adminUsers:[],
+      admHub:{on:false, state:'requested', rows:[], reason:{}, busy:null},  // hub listing review (superadmin)
       adminBusy:false, confirmAdmUser:null, confirmAdmOrg:null,
       proxy: location.origin, copyTool:null, snippetTab:'cURL', snippetTabs:['cURL','CLI','Claude Code','Python','Node'], copied:false,
       exPath:'<PATH>', exMethod:'GET',

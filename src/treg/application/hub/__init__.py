@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
 from ...domain.hub import ManifestError, price_label, stored_pricing, validate, validate_check, validate_readme
-from ...models import HubTool, Org, Tool
+from ...models import HubListing, HubTool, Org, Tool
 
 HUB_ID_MIN_PARTS = 2
 
@@ -274,14 +274,33 @@ def worst_usd(manifest: dict[str, Any], price_micro: int, rng: dict[str, Any] | 
     return p["max_price_usd"] if p["mode"] == "charge" else p["price_usd"]
 
 
-def view(row: HubTool) -> dict[str, Any]:
+def listing_view(listing: HubListing | None) -> dict[str, Any]:
+    """The tool's place in search, for the maker: `listed` is true only once treg approved it;
+    `listing` says where the request stands (none | requested | approved | rejected, with the
+    admin's reason on a rejection)."""
+    if listing is None:
+        return {"listed": False, "listing": {"state": "none"}}
+    return {"listed": listing.state == "approved",
+            "listing": {"state": listing.state, "reason": listing.reason,
+                        "requested_at": listing.requested_at.isoformat(),
+                        "decided_at": listing.decided_at.isoformat() if listing.decided_at else None}}
+
+
+async def listings_of(db: AsyncSession, tool_ids: list[str]) -> dict[str, HubListing]:
+    if not tool_ids:
+        return {}
+    return {r.tool_id: r for r in (await db.execute(
+        select(HubListing).where(HubListing.tool_id.in_(tool_ids)))).scalars().all()}
+
+
+def view(row: HubTool, listing: HubListing | None = None) -> dict[str, Any]:
     """The maker-facing shape of one version. The script is the maker's own; it is returned to
     the maker here and to nobody else (the public page of phase 7 hides it)."""
     return {
         "tool_id": row.tool_id, "version": row.version, "kind": row.kind, "status": row.status,
         "summary": row.summary, "writes": row.writes, "price_usd": row.price_micro / 1_000_000,
         "pricing": stored_pricing({"price_usd": row.price_micro / 1_000_000, **row.manifest}),
-        "listed": bool(row.listed), "public_log": bool(row.public_log),
+        **listing_view(listing), "public_log": bool(row.public_log),
         "price_label": price_label(row.manifest),
         "uses": row.manifest.get("uses", []), "inputs": row.manifest.get("inputs", {}),
         "output": row.manifest.get("output", {}), "limits": row.manifest.get("limits", {}),
@@ -361,7 +380,8 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
     from ...models import HubRun
     from ...timeutil import utcnow_naive
     rows = (await db.execute(
-        select(HubTool).where(HubTool.listed == True, HubTool.status == "live")  # noqa: E712
+        select(HubTool).join(HubListing, HubListing.tool_id == HubTool.tool_id)
+        .where(HubListing.state == "approved", HubTool.status == "live")
         .order_by(HubTool.tool_id, HubTool.version.desc()))).scalars().all()
     newest: dict[str, HubTool] = {}
     for r in rows:
@@ -403,20 +423,66 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
     return scored, stats
 
 
-async def set_flags(db: AsyncSession, *, org_id: int, tool_id: str,
+async def set_flags(db: AsyncSession, *, org_id: int, tool_id: str, maker_email: str = "",
                     listed: bool | None = None, public_log: bool | None = None) -> HubTool | None:
-    """The two distribution switches (docs/hub-listing-decisions.md, 2026-09-16), on the newest live
-    version, no version bump: `listed` (appears in catalog search) and `public_log` (the share page
-    shows the recent-runs log). A switch given as None is left alone. Returns the row, or None when
-    the team has no such live tool. Does not commit."""
+    """The maker's two distribution switches (docs/hub-listing-decisions.md), no version bump.
+    `public_log` is on the newest live version. `listed` is the tool's HubListing row: True asks for
+    a place in search (a new request, or a rejected one asked again; an approved or pending one is
+    left alone), False takes the tool out and withdraws any request. A switch given as None is left
+    alone. Returns the newest live row, or None when the team has no such live tool. Does not commit."""
     row = (await db.execute(select(HubTool).where(
         HubTool.tool_id == tool_id, HubTool.org_id == org_id, HubTool.status == "live")
         .order_by(HubTool.version.desc()).limit(1))).scalars().first()
     if row is None:
         return None
     if listed is not None:
-        row.listed = bool(listed)
+        from ...timeutil import utcnow_naive
+        current = await db.get(HubListing, tool_id)
+        if not listed:
+            if current is not None:
+                await db.delete(current)
+        elif current is None:
+            db.add(HubListing(tool_id=tool_id, org_id=org_id, state="requested", requested_by=maker_email))
+        elif current.state == "rejected":
+            current.state, current.reason, current.requested_by = "requested", "", maker_email
+            current.requested_at, current.decided_by, current.decided_at = utcnow_naive(), "", None
+            db.add(current)
     if public_log is not None:
         row.public_log = bool(public_log)
-    db.add(row)
+        db.add(row)
     return row
+
+
+async def pending_listings(db: AsyncSession, state: str = "requested") -> list[dict[str, Any]]:
+    """The listing requests treg reviews (a superadmin's queue), oldest first, each with what the
+    reviewer reads: the newest live version's summary, price, uses, health of its check."""
+    rows = (await db.execute(select(HubListing).where(HubListing.state == state)
+                             .order_by(HubListing.requested_at))).scalars().all()
+    out = []
+    for lst in rows:
+        tool = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id, HubTool.status == "live")
+                                 .order_by(HubTool.version.desc()).limit(1))).scalars().first()
+        out.append({"tool_id": lst.tool_id, "state": lst.state, "reason": lst.reason,
+                    "requested_by": lst.requested_by, "requested_at": lst.requested_at.isoformat(),
+                    "decided_by": lst.decided_by,
+                    "decided_at": lst.decided_at.isoformat() if lst.decided_at else None,
+                    "live": tool is not None,
+                    **({"version": tool.version, "kind": tool.kind, "summary": tool.summary,
+                        "price_label": price_label(tool.manifest), "uses": tool.manifest.get("uses", []),
+                        "check": (tool.check_result or {}).get("status")} if tool else {})})
+    return out
+
+
+async def decide_listing(db: AsyncSession, *, tool_id: str, approve: bool, reason: str,
+                         admin_email: str) -> HubListing | None:
+    """A superadmin's decision on a tool's listing: approve puts it in search, reject takes it out
+    (a first answer, or an approval taken back) with a reason the maker reads. None when the tool
+    has no listing row (it never asked, or the maker unlisted it). Does not commit."""
+    from ...timeutil import utcnow_naive
+    lst = await db.get(HubListing, tool_id)
+    if lst is None:
+        return None
+    lst.state, lst.reason = ("approved", "") if approve else ("rejected", reason.strip()[:500])
+    lst.decided_by, lst.decided_at = admin_email, utcnow_naive()
+    db.add(lst)
+    return lst

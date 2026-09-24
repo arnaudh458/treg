@@ -61,6 +61,8 @@ Regenerate via `scripts/build-map.py`.
 | `frontend/src/pages/DetailPage.vue` | interface/dashboard.md |
 | `frontend/src/pages/GettingStartedPage.vue` | interface/dashboard.md, interface/onboarding.md |
 | `frontend/src/pages/HelpPage.vue` | interface/dashboard.md |
+| `frontend/src/pages/HubPage.vue` | architecture/hub.md |
+| `frontend/src/pages/HubRunPage.vue` | architecture/hub.md |
 | `frontend/src/pages/PlatformPage.vue` | interface/dashboard.md |
 | `frontend/src/pages/ProviderPage.vue` | architecture/instagram-oauth.md, interface/dashboard.md |
 | `frontend/src/pages/ReferralsPage.vue` | interface/dashboard.md |
@@ -88,6 +90,7 @@ Regenerate via `scripts/build-map.py`.
 | `frontend/src/state/format.js` | interface/dashboard.md |
 | `frontend/src/state/governance.js` | interface/dashboard.md |
 | `frontend/src/state/help.js` | interface/dashboard.md |
+| `frontend/src/state/hub.js` | architecture/hub.md |
 | `frontend/src/state/keys.js` | architecture/auth-secrets.md, interface/dashboard.md |
 | `frontend/src/state/lifecycle.js` | interface/dashboard.md |
 | `frontend/src/state/navigation.js` | interface/dashboard.md |
@@ -170,15 +173,16 @@ Regenerate via `scripts/build-map.py`.
 | `src/treg/alembic/versions/0037_media_hosting.py` | architecture/media.md |
 | `src/treg/alembic/versions/0038_endpoint_day_stats.py` | architecture/catalog.md, architecture/data-model.md |
 | `src/treg/alembic/versions/0039_archive_own_key_and_repeat_pricing.py` | architecture/archive.md, architecture/data-model.md |
-| `src/treg/alembic/versions/0041_hub_tools.py` | architecture/hub.md |
 | `src/treg/alembic/versions/0041_searchlog.py` | architecture/data-model.md, architecture/search-experiment.md |
-| `src/treg/alembic/versions/0042_hub_runs.py` | architecture/hub.md |
 | `src/treg/alembic/versions/0042_pinned_read_scope.py` | architecture/data-model.md, architecture/multi-tenancy.md |
-| `src/treg/alembic/versions/0043_hubtool_check_result.py` | architecture/hub.md |
 | `src/treg/alembic/versions/0043_provider_resources.py` | architecture/data-model.md, architecture/multi-tenancy.md |
-| `src/treg/alembic/versions/0044_hubrun_output.py` | architecture/hub.md |
-| `src/treg/alembic/versions/0045_hubtool_data.py` | architecture/hub.md |
-| `src/treg/alembic/versions/0046_hubtool_listed_public_log.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0044_hub_tools.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0045_hub_runs.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0046_hubtool_check_result.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0047_hubrun_output.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0048_hubtool_data.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0049_hubtool_listed_public_log.py` | architecture/hub.md |
+| `src/treg/alembic/versions/0050_hub_listing.py` | architecture/hub.md |
 | `src/treg/analytics.py` | architecture/data-model.md |
 | `src/treg/api.py` | architecture/archive.md, architecture/money.md, architecture/multi-tenancy.md, architecture/proxy-model.md, architecture/super-admin.md, interface/api.md, interface/dashboard.md, interface/landing-sandbox.md, interface/seo.md |
 | `src/treg/application/__init__.py` | architecture/import-boundaries.md |
@@ -582,7 +586,7 @@ Regenerate via `scripts/build-map.py`.
 | `architecture/composition.md` | `bootstrap.py`, `bootstrap_handlers.py`, `bootstrap_http.py`, `call_surface.py`, `connect.py`, `mcp_oauth.py`, `session.py`, `admin.py`, `auth.py`, `billing.py`, `call.py`, `connections.py`, `onboard.py`, `orgs.py`, `resources.py`, `referrals.py`, `web.py`, `dump_surface.py`, `test_app_roles.py` |
 | `architecture/data-model.md` | `0042_pinned_read_scope.py`, `alembic.ini`, `env.py`, `0001_baseline_current_schema.py`, `0002_archive_tables.py`, `0003_callrecord_cached.py`, `0004_archivekey_request_shape.py`, `0005_capacity_policy_snapshot.py`, `0006_overflow_route.py`, `0007_overflow_spend.py`, `0008_org_platform_overflow_disabled.py`, `0009_callrecord_hit.py`, `0017_async_task_record.py`, `0018_async_resource_ownership.py`, `0019_async_poll_failures.py`, `0020_callrecord_created_at_indexes.py`, `0021_ledgerentry_org_created_at_index.py`, `0022_org_spent_today_counter.py`, `0023_callrecord_org_user_created_at_index.py`, `0024_membership_calls_today_counter.py`, `0027_enrich_arena.py`, `0028_arena_insights.py`, `0029_arena_verification_snapshot.py`, `0011_callrecord_archive_link.py`, `0015_idempotentcall_membership_cascade.py`, `0034_managed_api_keys.py`, `0035_default_key_generation.py`, `0036_activity_key_indexes.py`, `0038_endpoint_day_stats.py`, `maintenance.py`, `sitetrack.js`, `models.py`, `0031_archive_result_admission.py`, `0032_archive_body_storage.py`, `0039_archive_own_key_and_repeat_pricing.py`, `0043_provider_resources.py`, `provider_resources.py`, `provider_resources.py`, `0033_signup_promo_eligibility.py`, `0041_searchlog.py`, `timeutil.py`, `db.py`, `referrals.py`, `audit.py`, `analytics.py`, `bootstrap_handlers.py`, `ratestore.py`, `auth.py`, `test_postgres_reset.py`, `test_alembic_expand_safety.py`, `test_api_keys.py` |
 | `architecture/feedback.md` | `feedback_contract.py`, `__init__.py`, `reports.py`, `reviews.py`, `hints.py`, `config.py`, `call.py`, `invite.py`, `kv.py`, `feedback.py`, `feedback.py`, `0025_feedback.py`, `0026_callreview.py`, `0030_feedback_handling.py`, `test_feedback_handling_schema.py`, `feedback.md`, `test_feedback.py`, `test_reviews.py`, `test_hints.py`, `test_kv.py` |
-| `architecture/hub.md` | `__init__.py`, `manifest.py`, `refs.py`, `graph.py`, `__init__.py`, `runner.py`, `sandbox.py`, `limits.py`, `health.py`, `hub_sandbox.py`, `hub.py`, `catalog.py`, `web.py`, `service.py`, `__init__.py`, `mcp.py`, `cli.py`, `worker.py`, `models.py`, `index.html`, `skill.md`, `llms.txt`, `0041_hub_tools.py`, `0042_hub_runs.py`, `0043_hubtool_check_result.py`, `0044_hubrun_output.py`, `0045_hubtool_data.py`, `0046_hubtool_listed_public_log.py`, `run.js`, `run.js`, `run.js`, `test_hub.py`, `test_hub_sandbox.py`, `test_hub_run.py` |
+| `architecture/hub.md` | `__init__.py`, `manifest.py`, `refs.py`, `graph.py`, `__init__.py`, `runner.py`, `sandbox.py`, `limits.py`, `health.py`, `hub_sandbox.py`, `hub.py`, `catalog.py`, `web.py`, `service.py`, `__init__.py`, `mcp.py`, `hub.js`, `HubPage.vue`, `HubRunPage.vue`, `cli.py`, `worker.py`, `models.py`, `index.html`, `skill.md`, `llms.txt`, `0044_hub_tools.py`, `0045_hub_runs.py`, `0046_hubtool_check_result.py`, `0047_hubrun_output.py`, `0048_hubtool_data.py`, `0049_hubtool_listed_public_log.py`, `0050_hub_listing.py`, `run.js`, `run.js`, `run.js`, `test_hub.py`, `test_hub_sandbox.py`, `test_hub_run.py` |
 | `architecture/import-boundaries.md` | `pyproject.toml`, `ci.yml`, `__init__.py`, `__init__.py`, `access.py`, `authorize.py`, `idempotency.py`, `overflow.py`, `route.py`, `__init__.py`, `intake.py`, `resolve.py`, `reserve.py`, `settle.py`, `evidence.py`, `service.py`, `types.py`, `client_identity.py`, `__init__.py`, `__init__.py`, `access.py`, `budgets.py`, `publicdemo.py`, `teams.py`, `usage.py`, `__init__.py`, `__init__.py`, `authorization.py`, `oauth_flow.py`, `refresh.py`, `__init__.py`, `__init__.py`, `__init__.py`, `__init__.py`, `__init__.py`, `injectors.py`, `relay.py`, `__init__.py`, `limiter.py`, `test_call_architecture.py`, `test_import_lightness.py` |
 | `architecture/instagram-oauth.md` | `catalog_ingest.py`, `access.py`, `resolve.py`, `service.py`, `instagram.yaml`, `instagram.extended.yaml`, `cli.py`, `store.py`, `authorization.py`, `oauth_flow.py`, `oauth_exchange.py`, `mcp.py`, `call.py`, `connections.js`, `ProviderPage.vue`, `0010_oauth_authorization_method.py`, `test_instagram_oauth_architecture.py` |
 | `architecture/local-proxy.md` | `localproxy.py`, `server.js` |

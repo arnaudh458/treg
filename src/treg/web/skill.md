@@ -273,8 +273,9 @@ Only tools this org has registered resolve. Discover them with `treg tool ls` ·
 that runs in a sandbox. Every step runs through the team's own tools and keys; a caller pays the
 metered steps plus the price you set, and the price lands on your balance as credit. The tool is
 callable at once by id, `<team-slug>.<name>`, from any agent with a treg token. A new tool is NOT in
-search: you share the id or the page `{BASE}/hub/<id>`. List it with `treg hub list <id>` and it
-appears in `catalog_search` too, marked `kind: "hub"`, ranked by relevance like any endpoint.
+search: you share the id or the page `{BASE}/hub/<id>`. Ask for a place in search with `treg hub list <id>`:
+once treg approves the request it appears in `catalog_search` too, marked `kind: "hub"`, ranked by
+relevance like any endpoint (`treg hub ls` shows where the request stands, and a rejection's reason).
 
 **First, check this registry HAS the hub.** It is a per-deployment switch, and it is off by default.
 When it is off every `/hub/...` route answers `404` and every `treg hub` command refuses. That is
@@ -332,7 +333,7 @@ that makes several paid calls should add up `cost_usd` and stop early.
 treg hub run . --input domain=figma.com   # a real run on your own token; nothing stored; read the trace
 treg hub publish .                        # validate, run check.json once on your balance, live on pass
 treg hub ls · treg hub earnings <id>      # your tools; what one earned, per day
-treg hub list <id> · treg hub unlist <id>  # show it in catalog search, or take it out (no version bump)
+treg hub list <id> · treg hub unlist <id>  # ask for catalog search (treg approves), or take it out
 treg hub log <id> --public off             # hide the run log on your share page (default: shown)
 ```
 

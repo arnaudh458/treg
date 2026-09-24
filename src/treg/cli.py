@@ -5438,14 +5438,33 @@ def _hub_flag(args, cfg, field: str, value: bool, section: str, line: str) -> No
     _kv(field, line)
 
 
+_LISTING_WORDS = {
+    "none": "not in search — callable by id and share link only",
+    "requested": "requested — it appears in catalog search once treg approves it",
+    "approved": "approved — it is in catalog search (treg catalog search, catalog_search)",
+    "rejected": "rejected — not in search",
+}
+
+
 def cmd_hub_list(args, cfg) -> None:
-    _hub_flag(args, cfg, "listed", True, "Listed",
-              "on — the newest live version appears in catalog search (treg catalog search, catalog_search)")
+    with _client(cfg) as c:
+        r = c.patch(f"/hub/tools/{args.tool_id}", json={"listed": True})
+    if r.status_code != 200:
+        _hub_report(r, json_out=getattr(args, "json", False))
+    d = r.json()
+    if getattr(args, "json", False):
+        print(json.dumps(d, indent=2)); return
+    lst = d.get("listing") or {"state": "none"}
+    _section("Listing")
+    _kv("tool", f"{d['tool_id']}  v{d['version']}")
+    _kv("listing", _LISTING_WORDS.get(lst["state"], lst["state"]))
+    if lst.get("reason"):
+        _kv("reason", lst["reason"])
 
 
 def cmd_hub_unlist(args, cfg) -> None:
     _hub_flag(args, cfg, "listed", False, "Unlisted",
-              "off — callable by id and share link only; not in search")
+              "off — callable by id and share link only; not in search. Listing again is a new request.")
 
 
 def cmd_hub_log(args, cfg) -> None:
@@ -6586,7 +6605,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "treg hub price acme.leads-db 0.02", "treg hub price acme.leads-db 0   # free (a JSON recipe)")
     h_price.add_argument("tool_id"); h_price.add_argument("price_usd", type=float)
     h_price.set_defaults(fn=cmd_hub_price)
-    h_list = mk(hs, "list", "List one of your tools in the catalog: it appears in search (newest live version, no version bump).",
+    h_list = mk(hs, "list", "Ask for one of your tools to be in catalog search; it appears once treg approves it (no version bump).",
                 "treg hub list <team>.<name>")
     h_list.add_argument("tool_id"); h_list.set_defaults(fn=cmd_hub_list)
     h_unlist = mk(hs, "unlist", "Take one of your tools out of search; it stays callable by id and share link.",

@@ -27,12 +27,13 @@ sources:
   - src/treg/web/index.html
   - src/treg/web/skill.md
   - src/treg/web/llms.txt
-  - src/treg/alembic/versions/0041_hub_tools.py
-  - src/treg/alembic/versions/0042_hub_runs.py
-  - src/treg/alembic/versions/0043_hubtool_check_result.py
-  - src/treg/alembic/versions/0044_hubrun_output.py
-  - src/treg/alembic/versions/0045_hubtool_data.py
-  - src/treg/alembic/versions/0046_hubtool_listed_public_log.py
+  - src/treg/alembic/versions/0044_hub_tools.py
+  - src/treg/alembic/versions/0045_hub_runs.py
+  - src/treg/alembic/versions/0046_hubtool_check_result.py
+  - src/treg/alembic/versions/0047_hubrun_output.py
+  - src/treg/alembic/versions/0048_hubtool_data.py
+  - src/treg/alembic/versions/0049_hubtool_listed_public_log.py
+  - src/treg/alembic/versions/0050_hub_listing.py
   - docs/hub-recipes/data-sheets/run.js
   - docs/hub-recipes/data-csv/run.js
   - docs/hub-recipes/engineering-team-size/run.js
@@ -287,11 +288,22 @@ bump; a script's amounts change only with a new version of run.js.
   run, checks included, with `price_samples`; before any run the declared worst case plus
   "+ steps"; then `price_label`: the mode and the worst case; `cost.usd` is the
   worst case), health, version, `call_template`, the page URL, the readme);
-  never the script, the maker's tools or a key. Search lists a hub tool only when its maker set
-  `listed` (10.2): the newest live version is scored by `catalog_store.score_extra` with the catalog's
+  never the script, the maker's tools or a key. Search lists a hub tool only when treg approved its
+  listing (a `HubListing` row in state `approved`, below): the newest live version is scored by `catalog_store.score_extra` with the catalog's
   own tokens, aliases, platform boost, idf and admission gate, then merged by score with no boost
   (`merge_by_score`, catalog rows first on a tie). The row is the public contract plus its 30-day ok
-  rate from runs by others; unlisted, failed and retired never appear.
+  rate from runs by others; unlisted, unapproved, failed and retired never appear.
+- **The listing review** (`docs/hub-listing-decisions.md` round 2, 2026-09-24): `PATCH
+  /hub/tools/{id} {"listed": true}` (`treg hub list`) is a request, a `HubListing` row, one per
+  tool and not per version, so an approval stays across new versions (migration 0050; the old
+  per-version `hubtool.listed` column stays unread, expand-only). `set_flags` creates it in state
+  `requested`, asks again from `rejected`, leaves `requested` and `approved` alone; `listed: false`
+  deletes it. A superadmin reads the queue (`GET /admin/hub/listings?state=`, `pending_listings`:
+  summary, price label, uses, check verdict) and decides (`POST /admin/hub/listings/{id}
+  {decision: approve|reject, reason}`, `decide_listing`); a rejection needs a reason, which the
+  maker reads in `treg hub list`, `/hub/tools/mine` (`listing: {state, reason}`) and the dashboard's
+  Listing tab. The dashboard's Admin page carries the queue. `listed` in the maker's view is true
+  only when approved; another team's view of a tool never carries the request.
 - **The public share page** `GET /hub/<id>` (and `.md`; `@N`): the contract for a person or an
   agent on the public stylesheet; the price as the mode and the worst case ("seller $X per unit,
   up to $Y per run"; the schema.org Offer carries the worst case); the RUN LOG when the maker left
@@ -309,8 +321,8 @@ bump; a script's amounts change only with a new version of run.js.
   legacy dashboard carries the same view until its retirement.
 - **The CLI:** `treg hub init` scaffolds a `pricing` block (`price_usd` 0 for a recipe; `max_price_usd` 0.05 and one `ctx.charge` line for a script); `treg hub ls` shows the price
   label; `treg hub earnings` prints the average price per successful run; `treg hub list | unlist`
-  and `treg hub log --public on|off` flip the two distribution switches (`HubTool.listed`,
-  `HubTool.public_log`, migration 0046), which the dashboard's Listing tab also carries.
+  asks for a place in search or withdraws it (`HubListing`, above) and `treg hub log --public
+  on|off` flips `HubTool.public_log` (migration 0049), both also on the dashboard's Listing tab.
 
 ## The case study (2026-09-09) and what it taught
 

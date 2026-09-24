@@ -36,8 +36,8 @@ hubPricePrompt(t){ return 'Change the price of my treg hub tool '+t.tool_id+' (n
   +'Work in the folder it was published from, then run `treg hub publish <folder>` and confirm the new version is live (`treg hub ls`).'; },
 async setHubFlag(field, value){ if(!this.hub.tool) return; this.hub.flagSaving=true; this.hub.err='';
   try{ const d=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id), {method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({[field]:!!value})});
-       this.hub.tool={...this.hub.tool, [field]:d[field]}; await this.loadHub();
-       this.hub.note=field==='listed'?(d.listed?'Listed: it appears in catalog search.':'Unlisted: callable by id and share link only.')
+       this.hub.tool={...this.hub.tool, ...(field==='listed'?{listed:d.listed, listing:d.listing}:{[field]:d[field]})}; await this.loadHub();
+       this.hub.note=field==='listed'?(value?this.hubListingWords({listing:d.listing}):'Unlisted: callable by id and share link only.')
                                      :(d.public_log?'Public run log on.':'Public run log off.');
        setTimeout(()=>{ this.hub.note=''; }, 2500); }
   catch(e){ this.hub.err=this.hubErr(e); await this.loadHub(); }
@@ -57,6 +57,9 @@ async openRun(id, fromPop){ this.resetConfirms(); this.detail=null; this.view='r
   try{ this.run={loading:false, data:await this.api('/hub/runs/'+encodeURIComponent(id)), err:''}; }
   catch(e){ this.run={loading:false, data:null, err:this.hubErr(e, 'No such run for the team you are in ('+this.activeName+'). A run is readable by the team that called it and the team that made the tool: switch team and reload.')}; } },
 // api() throws Error('http') with .status and .detail: say the detail, or a plain sentence per status
+hubListing(t){ return ((t&&t.listing)||{}).state||'none'; },
+hubListingWords(t){ return {none:'Not in search.', requested:'Requested: it appears in search once treg approves it.',
+  approved:'Approved: it is in catalog search.', rejected:'Rejected: not in search.'}[this.hubListing(t)]; },
 hubErr(e, on404){ if(e&&e.status===404&&on404) return on404; if(e&&e.status===401) return 'Sign in to see this.';
   const d=e&&e.detail; if(d&&typeof d==='object') return (d.error?d.error+': ':'')+(d.message||d.rule||JSON.stringify(d)); return d||String((e&&e.message)||e); },
 fmtMs(ms){ return ms>=1000 ? (ms/1000).toFixed(1)+' s' : (ms||0)+' ms'; },

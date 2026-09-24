@@ -1314,9 +1314,26 @@ class HubTool(SQLModel, table=True):
     # upload, a replacement is a new version; the script reads it as ctx.data. Declared LAST
     # (migration 0037).
     data: str | None = Field(default=None)
-    # Phase 10 (docs/hub-listing-decisions.md): distribution switches, flipped without a version bump.
-    listed: bool = Field(default=False)              # true = appears in catalog search (newest live version)
+    # Phase 10 (docs/hub-listing-decisions.md): flipped without a version bump. Whether the tool is in
+    # catalog search is not a version's switch: it is the tool's HubListing row.
+    listed: bool = Field(default=False)              # UNREAD since migration 0050 (expand-only); use HubListing
     public_log: bool = Field(default=True)           # true = the share page shows the recent-runs log
+
+
+class HubListing(SQLModel, table=True):
+    """A hub tool's place in catalog search (docs/hub-listing-decisions.md round 2, 2026-09-24): the
+    maker requests it, a superadmin approves or rejects it. One row per tool, not per version, so
+    an approval stays when a new version is published; unlisting deletes the row, and listing again
+    is a new request. Only `approved` puts the tool in search."""
+
+    tool_id: str = Field(primary_key=True)           # `<slug>.<name>`
+    org_id: int = Field(foreign_key="org.id", index=True)
+    state: str = Field(default="requested", index=True)   # requested | approved | rejected
+    reason: str = Field(default="")                  # the admin's words on a rejection, for the maker
+    requested_by: str = Field(default="")            # the maker's email
+    requested_at: datetime = Field(default_factory=_now)
+    decided_by: str = Field(default="")              # the superadmin's email
+    decided_at: datetime | None = Field(default=None)
 
 
 class HubRun(SQLModel, table=True):

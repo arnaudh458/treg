@@ -30,3 +30,19 @@ failures is not a log.
 **5. The agent page gets the same log.**
 `/hub/<id>.md` carries the run table, so an agent can judge a tool before calling it, the same
 way it reads the price.
+
+## Round 2 — treg approves the listing (2026-09-24, owner + Jason)
+
+Jason's maker page puts search behind treg's approval. Decided:
+
+**1. `treg hub list` is a request.** The tool enters catalog search only when a superadmin approves
+it, in the dashboard's Admin page or `POST /admin/hub/listings/{id}`. A rejection carries a reason
+the maker reads; listing again asks again; unlisting withdraws the request or the approval.
+
+**2. An approval belongs to the tool, not to a version.** A new version stays listed, and the
+admin can take an approval back (a rejection with a reason). So the state is its own row
+(`HubListing`), not a column on each version, which reset on every publish.
+
+**3. Why approval.** At the start the hub serves a few teams; a weak tool in search costs every
+caller who picks it. Review keeps search worth trusting until run evidence can do that job.
+

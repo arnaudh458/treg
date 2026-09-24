@@ -307,6 +307,8 @@ _CONTROL_ROUTE_KEYS: frozenset[RouteKey] = frozenset({
     ('/admin/orgs/{org_id}', ('GET',), 'admin_org_detail'),
     ('/admin/users', ('GET',), 'admin_users'),
     ('/admin/tools', ('GET',), 'admin_tools'),
+    ('/admin/hub/listings', ('GET',), 'admin_hub_listings'),
+    ('/admin/hub/listings/{tool_id}', ('POST',), 'admin_hub_listing_decide'),
     ('/admin/calls', ('GET',), 'admin_calls'),
     ('/admin/errors', ('GET',), 'admin_errors'),
     ('/admin/health', ('GET',), 'admin_health'),

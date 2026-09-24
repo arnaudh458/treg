@@ -976,59 +976,107 @@ async def test_earnings_report_carries_the_average_price(clients: AsyncClient, h
 
 
 # ---------------------------------------------------------------------------------------------
-# Phase 10.1: the two distribution switches (docs/hub-listing-decisions.md).
+# Listing (docs/hub-listing-decisions.md round 2, 2026-09-24): `listed` is a request; a superadmin
+# approves or rejects it; only an approved tool is in search; the approval outlives a version.
 
-async def test_listing_switches_default_off_and_flip_without_a_version_bump(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+ADMIN = "hub-admin-token"
+
+
+async def _decide(clients, monkeypatch, tool_id, decision, reason=""):
+    monkeypatch.setenv("TREG_ADMIN_TOKEN", ADMIN)
+    get_settings.cache_clear()
+    return await clients.post(f"/admin/hub/listings/{tool_id}", json={"decision": decision, "reason": reason},
+                              headers={"X-Treg-Token": ADMIN})
+
+
+async def test_listed_is_a_request_and_the_switches_flip_without_a_version_bump(clients: AsyncClient, hub_on, platform_on, monkeypatch):
     pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
     tool_id = pub["tool_id"]
     one = (await clients.get(f"/hub/tools/{tool_id}")).json()
-    assert one["listed"] is False and one["public_log"] is True            # the defaults
+    assert one["listed"] is False and one["listing"] == {"state": "none"} and one["public_log"] is True
     r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
-    assert r.status_code == 200 and r.json() == {"tool_id": tool_id, "version": 1, "listed": True}
+    assert r.status_code == 200 and r.json()["listed"] is False and r.json()["listing"]["state"] == "requested"
     r = await clients.patch(f"/hub/tools/{tool_id}", json={"public_log": False})
     assert r.status_code == 200 and r.json() == {"tool_id": tool_id, "version": 1, "public_log": False}
-    one = (await clients.get(f"/hub/tools/{tool_id}")).json()
-    assert one["version"] == 1 and one["listed"] is True and one["public_log"] is False
     mine = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
-    assert mine["listed"] is True and mine["public_log"] is False
-    # a price-only PATCH keeps its exact old reply shape
-    r = await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.05})
-    assert r.json() == {"tool_id": tool_id, "version": 1, "price_label": "$0.05 a run",
-                        "pricing": {"mode": "per_call", "price_usd": 0.05}}
-    # an empty body names the rule; another team's tool is 404
+    assert mine["version"] == 1 and mine["listing"]["state"] == "requested" and mine["public_log"] is False
+    # an empty body names the rule; another team's tool is 404, and it never sees the request
     assert (await clients.patch(f"/hub/tools/{tool_id}", json={})).status_code == 422
     token = (await funded_user(clients, "stranger@example.com"))["token"]
     assert (await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True},
                                 headers={"X-Treg-Token": token})).status_code == 404
+    assert "listing" not in (await clients.get(f"/hub/tools/{tool_id}", headers={"X-Treg-Token": token})).json()
 
-
-# ---------------------------------------------------------------------------------------------
-# Phase 10.2: a listed hub tool appears in catalog search (docs/hub-listing-decisions.md, decision 2).
 
 Q_OWN_WORDS = "decision makers verified emails"     # the test tool's own summary words
 
 
-async def test_a_listed_hub_tool_appears_in_search_and_unlisted_or_retired_does_not(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+async def _search_ids(clients):
+    return [r["id"] for r in (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()["results"]]
+
+
+async def test_only_an_approved_tool_is_in_search(clients: AsyncClient, hub_on, platform_on, monkeypatch):
     pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
     tool_id = pub["tool_id"]
-    ids = [r["id"] for r in (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()["results"]]
-    assert tool_id not in ids                                                      # unlisted by default
+    assert tool_id not in await _search_ids(clients)                                 # not listed
     assert (await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})).status_code == 200
+    assert tool_id not in await _search_ids(clients)                                 # requested, not approved
+    r = await _decide(clients, monkeypatch, tool_id, "approve")
+    assert r.status_code == 200 and r.json()["listed"] is True
     body = (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()
     row = [r for r in body["results"] if r["id"] == tool_id][0]
     assert row["kind"] == "hub" and row["provider"] and row["price_line"].startswith("seller ")
     assert row["cost"]["usd"] == 0.011 and row["price_range"] == "$0.011/run" and "score" in row and "script" not in row and "uses" not in row
     assert body["hints"][0] == f"treg catalog get {tool_id}   # params, cost and an example response" or tool_id in json.dumps(body["hints"])
     assert (await clients.delete(f"/hub/tools/{tool_id}")).status_code == 200      # retired never appears
-    ids = [r["id"] for r in (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()["results"]]
-    assert tool_id not in ids
+    assert tool_id not in await _search_ids(clients)
 
 
-async def test_mcp_catalog_search_returns_a_listed_hub_tool(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+async def test_a_rejection_carries_a_reason_and_listing_again_asks_again(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    assert (await _decide(clients, monkeypatch, tool_id, "reject")).status_code == 422      # no reason
+    assert (await _decide(clients, monkeypatch, tool_id, "reject", "the summary does not say what it returns")).status_code == 200
+    mine = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
+    assert mine["listing"]["state"] == "rejected" and mine["listing"]["reason"].startswith("the summary")
+    queue = (await clients.get("/admin/hub/listings", params={"state": "rejected"}, headers={"X-Treg-Token": ADMIN})).json()
+    assert [q["tool_id"] for q in queue] == [tool_id] and queue[0]["price_label"] == "$0.01 a run"
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    assert r.json()["listing"] == {**r.json()["listing"], "state": "requested", "reason": "", "decided_at": None}
+    queue = (await clients.get("/admin/hub/listings", headers={"X-Treg-Token": ADMIN})).json()
+    assert [q["tool_id"] for q in queue] == [tool_id]
+    # unlisting withdraws it: nothing left to decide
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": False})
+    assert (await _decide(clients, monkeypatch, tool_id, "approve")).status_code == 404
+
+
+async def test_an_approval_stays_when_a_new_version_is_published(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    m = _steps_manifest(steps=[{"name": "people", "call": EP, "input": {"aweme_id": "$input.domain"}}],
+                        output={"leads": "$people.data"}, summary="Decision makers of a company, with verified emails, now faster.")
+    r = await clients.put(f"/hub/tools/{tool_id}", json={"manifest": m, "check": CHECK, "readme": "x"})
+    assert r.status_code == 200 and r.json()["version"] == 2 and r.json()["status"] == "live", r.text
+    assert tool_id in await _search_ids(clients)
+
+
+async def test_the_review_queue_is_superadmin_only(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    await clients.patch(f"/hub/tools/{pub['tool_id']}", json={"listed": True})
+    assert (await clients.get("/admin/hub/listings")).status_code in (401, 403)            # the maker
+    r = await clients.post(f"/admin/hub/listings/{pub['tool_id']}", json={"decision": "approve"})
+    assert r.status_code in (401, 403)
+
+
+async def test_mcp_catalog_search_returns_an_approved_hub_tool(clients: AsyncClient, hub_on, platform_on, monkeypatch):
     from tests.test_mcp import _call_tool, mcp_session
     pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
     tool_id = pub["tool_id"]
     await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
     token = (await funded_user(clients, "searcher@example.com"))["token"]
     async with mcp_session(clients) as c:
         out = await _call_tool(c, "catalog_search", {"query": Q_OWN_WORDS, "limit": 10}, token=token)

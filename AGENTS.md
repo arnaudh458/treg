@@ -124,7 +124,7 @@ agents then built against a constitution that was wrong.
   prices itself with `ctx.charge(usd, note)` lines, so the cap is held and the sum of the lines is
   settled, the rest refunded (`docs/hub-pricing-decisions.md`). A script runs in a separate process
   with no network; `ctx.call` is its only road out and `uses` in the manifest names every host it
-  may reach. A hub tool is out of catalog search until its maker lists it (`listed`), and its share
+  may reach. A hub tool is out of catalog search until its maker asks and treg approves (`HubListing`), and its share
   page shows a run log of outcomes only unless the maker turns `public_log` off
   (`docs/hub-listing-decisions.md`). See `docs/context/architecture/hub.md`.
 - **Signup credit.** Once per new verified user, enforced by a user-level atomic claim committed

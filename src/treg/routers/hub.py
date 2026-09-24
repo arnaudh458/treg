@@ -21,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..application import hub as hub_app
 from ..config import get_settings
 from ..domain.hub import ManifestError
-from ..domain.identity.access import Caller, _require_can_register, require_member
-from ..infra.db import get_session
+from ..domain.identity.access import Caller, _require_can_register, require_member, require_superadmin
+from ..infra.db import get_admin_session, get_session
 from ..models import HubTool
 
 app = APIRouter()
@@ -134,10 +134,11 @@ async def my_hub_tools(
     for r in rows:
         newest.setdefault(r.tool_id, r.manifest)
     ranges = await hub_app.price_ranges(db, newest)
+    listings = await hub_app.listings_of(db, list(newest))
     out = []
     for r in rows:
         h = await hub_health.health_of(db, r.tool_id, r.version, r.check_result)
-        out.append({**hub_app.view(r), "health": h.state, "fails_in_a_row": h.fails_in_a_row,
+        out.append({**hub_app.view(r, listings.get(r.tool_id)), "health": h.state, "fails_in_a_row": h.fails_in_a_row,
                     "last_run_at": h.last_run_at, **hub_app.with_range(r.manifest, ranges.get(r.tool_id)),
                     **stats.get(r.tool_id, {"runs_30d": 0, "earned_30d_micro": 0})})
     return out
@@ -203,7 +204,9 @@ async def get_hub_tool(
     row = (await db.execute(q.order_by(HubTool.version.desc()).limit(1))).scalars().first()
     if row is None or (row.org_id != caller.org_id and row.status != "live"):
         raise HTTPException(status_code=404, detail=f"no hub tool {tool_id!r}")
-    out = hub_app.view(row)
+    out = hub_app.view(row, (await hub_app.listings_of(db, [base])).get(base))
+    if row.org_id != caller.org_id:
+        out.pop("listing")                       # the request and the admin's reason are the maker's
     if row.org_id == caller.org_id:
         out["script"] = row.script
         out["check"] = row.check
@@ -378,7 +381,7 @@ async def set_hub_tool_price(
         if body.price_usd is not None:
             row = await hub_app.set_price(db, org_id=caller.org_id, tool_id=base, price_usd=body.price_usd)
         if body.listed is not None or body.public_log is not None:
-            row = await hub_app.set_flags(db, org_id=caller.org_id, tool_id=base,
+            row = await hub_app.set_flags(db, org_id=caller.org_id, tool_id=base, maker_email=caller.email,
                                           listed=body.listed, public_log=body.public_log)
     except ManifestError as exc:
         raise HTTPException(status_code=422, detail={"error": "manifest_invalid", "field": exc.field, "rule": exc.rule}) from None
@@ -390,7 +393,7 @@ async def set_hub_tool_price(
         out["pricing"] = hub_app.stored_pricing({"price_usd": row.price_micro / 1_000_000, **row.manifest})
         out["price_label"] = hub_app.price_label(row.manifest)
     if body.listed is not None:
-        out["listed"] = bool(row.listed)
+        out.update(hub_app.listing_view((await hub_app.listings_of(db, [base])).get(base)))
     if body.public_log is not None:
         out["public_log"] = bool(row.public_log)
     return out
@@ -423,3 +426,44 @@ async def hub_tool_health(
                       "steps": r.steps, "cost_micro": r.cost_micro, "price_micro": r.price_micro,
                       "ms": r.duration_ms, "error": (r.error or {}).get("error") if r.error else None}
                      for r in runs]}
+
+
+# ---------------------------------------------------------------------------------------------
+# Listing review (docs/hub-listing-decisions.md round 2): a maker's `treg hub list` is a request;
+# a superadmin approves or rejects it here. Only an approved tool is in catalog search.
+
+class ListingDecisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: str = Field(pattern="^(approve|reject)$")
+    reason: str = Field(default="", max_length=500)
+
+
+@app.get("/admin/hub/listings")
+async def admin_hub_listings(
+    state: str = "requested", admin: str = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_admin_session),
+) -> list[dict]:
+    """The review queue: listing requests in `state` (requested | approved | rejected), oldest first."""
+    if not hub_app.enabled() or state not in ("requested", "approved", "rejected"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await hub_app.pending_listings(db, state)
+
+
+@app.post("/admin/hub/listings/{tool_id}")
+async def admin_hub_listing_decide(
+    tool_id: str, body: ListingDecisionIn, admin: str = Depends(require_superadmin),
+    db: AsyncSession = Depends(get_admin_session),
+) -> dict:
+    """Approve (the tool enters search) or reject (it leaves search; the maker reads the reason).
+    A rejection needs a reason: the maker has to know what to fix."""
+    if not hub_app.enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+    if body.decision == "reject" and not body.reason.strip():
+        raise HTTPException(status_code=422, detail={"error": "reason_required",
+                                                     "rule": "say why, in words the maker can act on"})
+    lst = await hub_app.decide_listing(db, tool_id=tool_id, approve=body.decision == "approve",
+                                       reason=body.reason, admin_email=admin)
+    if lst is None:
+        raise HTTPException(status_code=404, detail=f"no listing request for {tool_id!r}")
+    await db.commit()
+    return {"tool_id": tool_id, **hub_app.listing_view(lst)}

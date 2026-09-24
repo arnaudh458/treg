@@ -423,7 +423,8 @@ plus the price the maker set, and the price lands on the maker's balance as `ear
 credit, spendable at once. Callable the moment it is published, by id `<team-slug>.<name>`:
 `POST {BASE}/call/<id>` with the inputs as a JSON body → `{run_id, output, usage, trace}`. A new
 tool is not in search; the maker shares the id or the page `{BASE}/hub/<id>` (`.md` for agents), and
-may LIST it (`treg hub list <id>`) so it appears in `catalog_search` as a `kind: "hub"` row.
+may ask to LIST it (`treg hub list <id>`); once treg approves, it appears in `catalog_search` as a
+`kind: "hub"` row.
 
 **The hub is a per-deployment switch, off by default.** When a registry has it off, every
 `/hub/...` route answers `404` and every `treg hub` command refuses. Read that as "this registry
@@ -460,8 +461,9 @@ and `200` when it is on.
   add`), list the tool in `uses`, name it in `ctx.call`. The script never sees the key.
 - Read any hub tool's contract with `GET {BASE}/catalog/endpoints/<id>` (`catalog_get`,
   `treg catalog get`): inputs, output, price line, health, the call line.
-- **Listing and the run log** (the maker's two switches, no version bump): `treg hub list <id>` puts
-  the newest live version in catalog search (`treg hub unlist` takes it out); `treg hub log <id>
+- **Listing and the run log** (the maker's two switches, no version bump): `treg hub list <id>` asks
+  for a place in catalog search, which treg approves or rejects with a reason (`treg hub ls` shows
+  the state); an approval stays across new versions; `treg hub unlist` takes it out; `treg hub log <id>
   --public off` hides the run log on the share page. The page's log shows the last 20 runs and runs
   per day: time, outcome, ms, steps, units, price paid — never who called, never inputs or output.
 - Versions: the newest live one serves; `<id>@N` pins one for 30 days after a newer lands.

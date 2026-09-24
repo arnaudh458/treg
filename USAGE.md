@@ -500,14 +500,16 @@ treg hub ls                                 your team's hub tools, every version
 treg hub earnings <id> [--days N] [--csv]   what one tool earned, per day (sales only; never who called)
 treg hub price <id> <usd>                   change the price for later runs; no version bump; 0 = free
 treg hub retire <id>                        every version off the call road; history and earnings stay readable
-treg hub list <id> · treg hub unlist <id>   show the newest live version in catalog search, or take it out
+treg hub list <id> · treg hub unlist <id>   ask for a place in catalog search (treg approves), or take it out
 treg hub log <id> --public on|off           show or hide the run log on the share page (default on)
 ```
 
-**Listing and the public run log.** Both are switches on the newest live version, and neither bumps
-the version. `list` puts the tool in `treg catalog search` and `catalog_search`, marked `hub` with
-your team, the price label and the 30-day success rate, ranked by relevance with no boost; unlisted,
-failed and retired tools never appear. The share page's run log shows the last 20 runs and runs per
+**Listing and the public run log.** Neither bumps the version. `list` is a request: once treg
+approves it, the tool is in `treg catalog search` and `catalog_search`, marked `hub` with your team,
+the price label and the 30-day success rate, ranked by relevance with no boost. A rejection comes
+with a reason (`treg hub ls`, and the dashboard's Listing tab); listing again asks again. An
+approval belongs to the tool and stays across new versions; `unlist` withdraws it. Unlisted,
+unapproved, failed and retired tools never appear. The share page's run log shows the last 20 runs and runs per
 day for 30 days: time, outcome, duration, steps, units and the price paid, and never who called,
 the inputs, or the output. The dashboard has the same two switches under Hub → a tool → Listing.
 

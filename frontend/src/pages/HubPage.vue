@@ -106,10 +106,16 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
             </template>
 
             <template v-if="hub.tab==='listing'">
-              <p class="sub">Two switches on the newest live version. Neither bumps the version.</p>
+              <p class="sub">Neither choice bumps the version.</p>
               <div style="margin:14px 0 4px">
-                <label class="tgl" style="font-size:13.5px"><input type="checkbox" :checked="!!hub.tool.listed" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @change="setHubFlag('listed',$event.target.checked)"/><span><b>Listed in the catalog</b></span></label>
-                <p class="sub" style="margin:4px 0 0 21px;max-width:70ch">Off: only someone with the id or the share link can call it. On: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost.</p>
+                <div class="lbl">In catalog search</div>
+                <p class="sub" style="margin:4px 0;max-width:70ch">
+                  <b :class="{ok:hubListing(hub.tool)==='approved', warn:hubListing(hub.tool)==='rejected'}">{{hubListingWords(hub.tool)}}</b>
+                  <template v-if="hubListing(hub.tool)==='rejected' && hub.tool.listing.reason"> Reason: {{hub.tool.listing.reason}}</template>
+                </p>
+                <button v-if="['none','rejected'].includes(hubListing(hub.tool))" class="btn sm primary" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @click="setHubFlag('listed',true)">{{hubListing(hub.tool)==='rejected'?'Ask again':'Ask to list it'}}</button>
+                <button v-else class="btn sm" :disabled="hub.flagSaving||!canRegister" @click="setHubFlag('listed',false)">{{hubListing(hub.tool)==='approved'?'Unlist':'Withdraw the request'}}</button>
+                <p class="sub" style="margin:6px 0 0;max-width:70ch">Listed: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost. treg reviews each request; an approval stays when you publish a new version. Not listed: only someone with the id or the share link can call it.</p>
               </div>
               <div style="margin:14px 0 4px">
                 <label class="tgl" style="font-size:13.5px"><input type="checkbox" :checked="hub.tool.public_log!==false" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @change="setHubFlag('public_log',$event.target.checked)"/><span><b>Public run log on the share page</b></span></label>
