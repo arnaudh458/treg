@@ -23,6 +23,7 @@ from ...models import (
     CallReview,
     Media,
     Hold,
+    HubListing,
     HubRun,
     HubTool,
     IdempotentCall,
@@ -208,6 +209,7 @@ ORG_SCOPED_MODELS = (
     IdempotentCall,            # a remembered answer belongs to the team that paid for it
     ToolRequest,  # attribution rows go with the team; anonymous filings carry no org_id and stay
     Feedback,
+    HubListing,   # a tool's search listing goes with the team that asked for it
     HubTool,      # a maker's published tools go with the team that owned them
     CallReview,
     Media,        # hosted reference files expire on their own; a deleted team's go now

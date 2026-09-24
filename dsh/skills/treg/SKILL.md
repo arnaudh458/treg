@@ -305,8 +305,12 @@ Only tools this org has registered resolve. Discover them with `treg tool ls` ·
 that runs in a sandbox. Every step runs through the team's own tools and keys; a caller pays the
 metered steps plus the price you set, and the price lands on your balance as credit. The tool is
 callable at once by id, `<team-slug>.<name>`, from any agent with a treg token. A new tool is NOT in
-search: you share the id or the page `https://treg.to/hub/<id>`. List it with `treg hub list <id>` and it
-appears in `catalog_search` too, marked `kind: "hub"`, ranked by relevance like any endpoint.
+search: you share the id or the page `https://treg.to/hub/<id>`. Ask for a place in search with `treg hub list <id>`:
+once treg approves the request it appears in `catalog_search` too, marked `kind: "hub"`, ranked by
+relevance like any endpoint (`treg hub ls` shows where the request stands, and a rejection's reason).
+Name the job in recipe.json, `"capability": "people.email.find"` (a capability id from
+`treg catalog search`): once approved, `catalog_get` on any provider of that job lists your tool
+beside them, with a success rate that starts at an estimate and follows real runs.
 
 **First, check this registry HAS the hub.** It is a per-deployment switch, and it is off by default.
 When it is off every `/hub/...` route answers `404` and every `treg hub` command refuses. That is
@@ -332,9 +336,9 @@ treg tool add supabase --base-url https://<ref>.supabase.co \
 ```
 
 **What a script gets — the whole surface:** `ctx.inputs` (checked against the manifest),
-`ctx.call(target, {method, query, body, headers, timeout_s})` → `{status, headers, json, text, timed_out, cost_usd}` (calls in one `Promise.all` run four at once), `ctx.charge(usd, label)` (bill the caller for an own-key step whose cost treg cannot see: your vendor; needs `pricing.max_charge_usd`, the most all charges may total in one run, shown to the caller),
+`ctx.call(target, {method, query, body, headers, timeout_s})` → `{status, headers, json, text, timed_out, cost_usd}` (calls in one `Promise.all` run four at once), `ctx.charge(usd, note)` (your price, one line at a time; see Pricing below),
 `ctx.csv(text)` → rows keyed by the header, `ctx.data` → the rows of the `data.csv` uploaded with
-the tool (a fifth file, ≤ 50 MB, read-only; replace it and publish again), and `ctx.log(text)`.
+the tool (a fifth file, ≤ 5 MB, read-only; replace it and publish again), and `ctx.log(text)`.
 No network, no files, no `require`; `ctx.call` is the only road out, and `target` must be in the
 manifest's `uses`: a catalog id, one of the team's own tools as `<tool>/<path>`, or a full URL
 under such a tool's base URL. **Your own server is a tool:** `treg tool add my-api --base-url
@@ -344,16 +348,16 @@ Caps: 120 s, 20 calls, 64 MB, four runs at a time per team. A steps recipe inste
 `steps` and reads earlier answers with references (`$input.x`, `$step.path`, `$step[]`,
 `$step.length`); steps that do not depend on each other run four at a time.
 
-**Pricing — one mode per tool, your price only.** The provider fees (the catalog steps) are billed
-to the caller on top; your price is what you earn per successful run. In `recipe.json`, either a
-`price_usd`, or a `pricing` block:
-- `{"mode": "per_call", "price_usd": 0.02}` — a fixed price per successful run.
-- `{"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}` — per result returned:
-  your code returns an integer `results` (declare it as an output field); `results_from` names the
-  `int` input whose `max` bounds one run.
-- `{"mode": "percent", "percent": 5}` — that percent of the run's provider fees (the tool must call
-  at least one catalog tool).
-Callers never see the mode: they see what recent runs cost, low to high, fees and your price together.
+**Pricing — your price only.** The provider fees (the catalog steps) are billed to the caller on
+top; your price is what you earn per successful run. A failed run charges nothing.
+- A steps recipe: `"pricing": {"price_usd": 0.02}`, a fixed price per successful run (0 = free).
+- A script: `"pricing": {"max_price_usd": 0.05}`, and the price itself in run.js with
+  `ctx.charge(usd, note)`, as many lines as you need: a fee (`ctx.charge(0.01, "fee")`), per result
+  (`ctx.charge(rows.length * 0.002, "per row")`), a margin on a catalog call
+  (`ctx.charge(r.cost_usd * 0.2, "20% margin")`), your vendor's cost (`ctx.charge(0.03, "vendor hit")`).
+  The caller sees `max_price_usd` before the run; the run settles at the sum of the lines, and a
+  line that would pass the cap stops the run. No `pricing` block: free, and ctx.charge is refused.
+Callers see what recent runs cost, low to high, fees and your price together.
 The caller's `X-Treg-Run-Max-Cost` caps the whole run, your price included; when the caller sends none your
 `limits.cost_usd` does (else $1.00). A run that passes the cap is stopped and returns nothing, so a script
 that makes several paid calls should add up `cost_usd` and stop early.
@@ -364,7 +368,7 @@ that makes several paid calls should add up `cost_usd` and stop early.
 treg hub run . --input domain=figma.com   # a real run on your own token; nothing stored; read the trace
 treg hub publish .                        # validate, run check.json once on your balance, live on pass
 treg hub ls · treg hub earnings <id>      # your tools; what one earned, per day
-treg hub list <id> · treg hub unlist <id>  # show it in catalog search, or take it out (no version bump)
+treg hub list <id> · treg hub unlist <id>  # ask for catalog search (treg approves), or take it out
 treg hub log <id> --public off             # hide the run log on your share page (default: shown)
 ```
 
