@@ -29,6 +29,7 @@ sources:
   - tests/test_api_keys.py
   - tests/test_oauth_refresh.py
   - tests/test_financialdatasets.py
+  - tests/test_fetchinio.py
   - tests/test_key_providers.py
   - src/treg/config.py
 related:
@@ -38,6 +39,12 @@ related:
 ---
 
 # Auth & secrets
+
+Fetchin uses a pasted `X-API-Key` at `https://api.fetchin.io`. Its free internal
+`GET /api/v1/subscription` probe rejects invalid credentials and accepts a valid account even when
+its credit balance is zero. `TREG_PLATFORM_KEY_FETCHINIO` supplies the optional shared binding;
+the own-key-first ladder keeps a team's credential unmetered. The same free route supplies capacity
+data and is not exposed as a catalog tool.
 
 Tavily uses a pasted Bearer key at `https://api.tavily.com`. Its free internal `GET /usage` probe
 rejects invalid credentials and validates both team-owned and optional platform credentials without

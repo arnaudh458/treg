@@ -2,6 +2,16 @@
 title: Endpoint catalog — what you can DO with a connected key, and which provider should do it
 status: shipped
 sources:
+  - src/treg/catalog/fetchinio.yaml
+  - src/treg/web/logos/fetchinio.svg
+  - tests/test_fetchinio.py
+  - src/treg/catalog/examples/fetchinio.linkedin.user.profile.json
+  - src/treg/catalog/examples/fetchinio.linkedin.company.profile.json
+  - src/treg/catalog/examples/fetchinio.linkedin.user.posts.json
+  - src/treg/catalog/examples/fetchinio.linkedin.user.reactions.json
+  - src/treg/catalog/examples/fetchinio.linkedin.post.comments.json
+  - src/treg/catalog/examples/fetchinio.linkedin.post.reactions.json
+  - src/treg/catalog/examples/fetchinio.linkedin.post.engagement.json
   - src/treg/catalog/fishaudio.yaml
   - src/treg/catalog/examples/fishaudio.tts.s2-1-pro.json
   - src/treg/catalog/examples/fishaudio.voices.create.json
@@ -118,6 +128,27 @@ related:
 ---
 
 # Endpoint catalog — platform-grouped operations per provider
+
+## Fetchin
+
+`fetchinio.yaml` curates Fetchin's seven public LinkedIn data routes: profile, company, member
+posts and reactions, post comments and reactions, and the combined engagement read. All seven are
+strict-query GET tools and are available through BYOK or the platform key; the normal own-key-first
+ladder keeps a team's credential unmetered. `GET /api/v1/subscription` is deliberately internal:
+it is the free connection probe and capacity collector rather than an account-kind catalog tool.
+
+Live balance deltas on 2026-09-24 confirmed one credit for every ordinary successful route and two
+for combined engagement. The shared account's acquired PAYG replacement rate is $1.50 per 1,000
+credits, so the rows are $0.0015 and $0.003 per call. Fetchin also bills one credit for a 404 while
+every other failure is free. Its response contains no per-call charge evidence, and treg's generic
+settlement rule never charges a rejected response on an estimate; the shared tier therefore absorbs
+that upstream 404 cost. `fullProfile=true` can cost either one or two credits without reporting
+which happened, so the strict curated profile row excludes it. A team's raw BYOK tool remains a
+faithful relay and can still request it.
+
+The examples were captured from public-figure and company fixtures. Comment and reaction actors,
+their text, cursors and profile identifiers are replaced with reserved synthetic values before
+commit; only the public test post identifier remains.
 
 ## Fish Audio v1
 
