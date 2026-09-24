@@ -198,11 +198,14 @@ export default {
       if(first && this.built) return;
       stage.style.height=Math.max(520, innerHeight-stage.getBoundingClientRect().top-scrollY)+'px';
       const W=stage.clientWidth, H=stage.clientHeight;
-      const size=tileSize(W, H, this.tiles.length, W<640 ? 0.22 : 0.25);
+      // On a phone the pile is a band under the question box, not half the screen: smaller tiles
+      // and a smaller share, so the answer above keeps the height.
+      const size=W<640 ? tileSize(W, H, this.tiles.length, 0.08, 15) : tileSize(W, H, this.tiles.length, 0.25);
       const rebuild=!this.built || size!==this.size;
       this.size=size; this.pile.size=size;
-      // Room for the settled pile under the question box: the tiles' area, loosely packed, across the width.
-      this.floor=Math.round(this.tiles.length*size*size/(0.62*W) + size*0.8);
+      // Room for the settled pile under the question box: the tiles' area, loosely packed, across the
+      // width. Small tiles on a narrow screen settle much denser.
+      this.floor=Math.round(this.tiles.length*size*size/((W<640 ? 1.1 : 0.62)*W) + size*0.8);
       this.pile.bounds(W, H);
       if(rebuild){
         this.pile.clear();
@@ -489,4 +492,23 @@ html.sp-lock,html.sp-lock body{overflow:hidden;overscroll-behavior:none}
 .sp-tile.landed{z-index:7;box-shadow:none;cursor:pointer}
 .sp-tile.held{z-index:8;cursor:grabbing;opacity:1;filter:none;box-shadow:var(--l-shadow-lg)}
 @media (prefers-reduced-motion:reduce){.sp-card,.sp-hero{transition:none;animation:none}}
+/* A phone: the question box sits low, just above the pile's band, so the hero or the answer gets
+   the screen above it; the examples are one row that scrolls sideways instead of a wall of pills. */
+@media (max-width:640px){
+  .sp{padding:68px 14px 0;gap:10px}
+  .sp-hero{gap:14px}
+  .sp-count{font-size:10.5px;letter-spacing:.02em;white-space:nowrap}
+  .sp-hero h1{font-size:clamp(28px,8.4vw,36px)}
+  .sp-panel{padding:4px 2px 8px;gap:12px}
+  .sp-panel-h{gap:10px}
+  .sp-actions{width:100%;justify-content:space-between}
+  .sp-copy{padding:9px 16px;font-size:13px}
+  .sp-cards{gap:10px}
+  .sp-card{padding:12px 14px}
+  .sp-meta{min-height:22px;font-size:11px;text-align:center}
+  .sp-chips{flex-wrap:nowrap;justify-content:flex-start;max-width:100%;width:100%;overflow-x:auto;scrollbar-width:none;
+    padding:0 2px 2px;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent);mask-image:linear-gradient(90deg,#000 88%,transparent)}
+  .sp-chips::-webkit-scrollbar{display:none}
+  .sp-chip{flex:none;white-space:nowrap;font-size:12.5px;padding:6px 13px}
+}
 </style>

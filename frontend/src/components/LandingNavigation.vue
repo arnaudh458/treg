@@ -19,7 +19,7 @@ export default { components: { BrandMark }, setup: useDashboard }
       <!-- /search draws before the session is known: no Sign in that turns into Open dashboard. -->
       <a v-if="authed" class="lnav-candy" href="/app">Open dashboard</a>
       <template v-else-if="sessionChecked">
-        <a href="/app?ref=search" @click.prevent="openSignin()">Sign in</a>
+        <a class="hidexs" href="/app?ref=search" @click.prevent="openSignin()">Sign in</a>
         <button class="lnav-candy" type="button" @click="openSignin()">Start free</button>
       </template>
     </div>
@@ -46,6 +46,12 @@ export default { components: { BrandMark }, setup: useDashboard }
 [data-theme="dark"] .lnav-links .lnav-candy{background:#f2efe8;color:#151412}
 @media(max-width:640px){
   .lnav{gap:12px;padding:14px 16px}.lnav-links{gap:12px}.lnav-links a{font-size:11px}
-  .lnav-links .lnav-candy{padding:9px 13px;font-size:11px}.lnav-links .hidem{display:none}
+  .lnav-links .lnav-candy{padding:9px 13px;font-size:11px}
+  .lnav-links a.hidem{display:none}   /* `a.ico` sets display too; this has to outrank it */
+  .lnav-links .lnav-candy{white-space:nowrap}
+}
+/* Start free opens the same sign-in, so the narrowest phones keep one of the two. */
+@media(max-width:400px){
+  .lnav-links a.hidexs{display:none}
 }
 </style>
