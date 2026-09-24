@@ -2713,7 +2713,7 @@ _DOCS_INTRO = """
 response. treg injects the credential server-side and relays the answer verbatim. Nothing here
 models a provider's API, which is why an upstream change does not break us and why the caller never
 holds a secret.</p>
-<pre class="call">curl -H "Authorization: Bearer $TREG_TOKEN" \\
+<pre class="call">curl -H "X-Treg-Token: $TREG_TOKEN" \\
   "{BASE}/call/moz.web.url.metrics"</pre>
 <p>Prefix any catalogued endpoint id with <code>/call/</code>. If your team has its own key for that
 provider, treg uses it and the call is <b>not metered</b>; otherwise eligible endpoints are served on
@@ -2733,8 +2733,9 @@ endpoint is at <code>{BASE}/mcp</code>. An interactive console for everything be
 <a href="/docs/api">/docs/api</a>.</p>
 
 <h2>Endpoints</h2>
-<p>Authenticated requests carry <code>Authorization: Bearer &lt;token&gt;</code> (or
-<code>X-Treg-Token</code>). The catalog routes are open and need no token.</p>
+<p>Authenticated requests carry the token in the <code>X-Treg-Token</code> header.
+<code>Authorization: Bearer &lt;token&gt;</code> is accepted only by the MCP endpoint; the REST
+routes below ignore it and answer 401. The catalog routes are open and need no token.</p>
 """
 
 
@@ -2786,7 +2787,7 @@ async def docs_page():
   real request to any of {n_endpoints} catalogued provider endpoints through <code>/call/</code>.</p>
   <div class="facts">
     <span>base <b>{_esc_html(base)}</b></span>
-    <span><b>Bearer</b> token auth</span>
+    <span><b>X-Treg-Token</b> header auth</span>
     <span><a href="/openapi.json">openapi.json</a></span>
     <span><a href="/docs/api">interactive console</a></span>
   </div>
