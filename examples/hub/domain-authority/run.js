@@ -47,6 +47,7 @@ export default async function run(ctx) {
   const verdict = grade(report);
   const failed = [["backlinks_summary", sum], ["ranked_keywords", kw], ["linking_domains", refs]].filter(([, r]) => !r.ok).map(([n, r]) => `${n}: ${r.note}`);
   ctx.log(`${domain}: rank ${report.domain_rank}, ${report.referring_domains} referring domains, ${report.keywords_ranked} keywords → ${verdict}` + (failed.length ? `; failed ${failed.join(", ")}` : ""));
+  ctx.charge(0.01, "fee");                               // the price: $0.01 a run
   return {
     domain, search_engine: se, verdict, report,
     top_keywords: topKeywords, top_linking_domains: topLinkers,

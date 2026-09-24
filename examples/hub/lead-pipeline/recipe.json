@@ -55,11 +55,7 @@
       "units"
     ]
   },
-  "pricing": {
-    "mode": "per_unit",
-    "per_unit_usd": 0.01,
-    "max_price_usd": 0.09
-  },
+  "pricing": { "max_price_usd": 0.09 },
   "limits": {
     "cost_usd": 2.0
   }

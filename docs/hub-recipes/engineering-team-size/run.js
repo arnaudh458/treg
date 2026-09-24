@@ -103,6 +103,7 @@ export default async function run(ctx) {
 
   const confidence = !selected ? "none" : reasons.length ? "low" : disagreement !== null && disagreement <= 0.25 ? "strong" : "medium";
 
+  ctx.charge(0.15, "fee");                               // the price: $0.15 a run
   return {
     domain,
     status: !selected ? "no_estimate" : reasons.length ? "needs_review" : "estimated",

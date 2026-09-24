@@ -81,6 +81,9 @@ export default async function run(ctx) {
   const compared = FIELDS.filter(f => agreement[f] === "agree" || agreement[f] === "disagree");
   const agreed = compared.filter(f => agreement[f] === "agree").length;
   const confidence = compared.length ? Math.round(100 * agreed / compared.length) / 100 : null;
+  // The price: 30% on top of what the sources cost, at most the $0.05 cap in recipe.json.
+  const fees = answers.reduce((a, x) => a + (x.cost_usd || 0), 0);
+  if (fees > 0) ctx.charge(Math.min(Math.round(fees * 0.3 * 1e6) / 1e6, 0.05), "30% on the sources' fees");
   return {
     domain, company: merged, agreement, confidence,
     sources: answers.map(a => ({ source: a.source, status: a.status, note: a.note, record: a.record, cost_usd: a.cost_usd })),

@@ -387,7 +387,8 @@ async def set_hub_tool_price(
     await db.commit()
     out: dict = {"tool_id": base, "version": row.version}
     if body.price_usd is not None:
-        out["price_usd"] = row.price_micro / 1_000_000
+        out["pricing"] = hub_app.stored_pricing({"price_usd": row.price_micro / 1_000_000, **row.manifest})
+        out["price_label"] = hub_app.price_label(row.manifest)
     if body.listed is not None:
         out["listed"] = bool(row.listed)
     if body.public_log is not None:

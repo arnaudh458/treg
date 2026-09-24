@@ -32,7 +32,7 @@ Plain rules, in code:
 
 ## What it costs
 
-Nothing in provider calls. A flat **$0.01** for the tool.
+Nothing in provider calls. **$0.01** for the tool (`ctx.charge(0.01, "fee")`).
 
 ## Status
 

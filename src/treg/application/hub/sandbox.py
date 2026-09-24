@@ -208,17 +208,18 @@ async def run_script(
                 if len(log) < MAX_LOG_LINES:
                     log.append(str(msg.get("text", ""))[:MAX_LOG_CHARS])
             elif op == "charge":
-                # ctx.charge: the script bills the caller for an own-key step. Refused, and the run
-                # stops, when the manifest declares no cap, the amount passes the cap, or the run has
-                # already charged 20 times: every line the caller pays is bounded by what they saw.
+                # ctx.charge: the script's price, one line at a time (a fee, per result, a margin, a
+                # vendor's cost). Refused, and the run stops, when the manifest declares no cap, the
+                # sum passes the cap, or the run has already charged 20 times: every line the caller
+                # pays is bounded by the `max_price_usd` they saw before the run.
                 usd = msg.get("usd")
                 if charges is None or max_charge_micro <= 0:
-                    raise SandboxError("refused", "ctx.charge needs `pricing.max_charge_usd` in the manifest")
+                    raise SandboxError("refused", "ctx.charge needs `pricing.max_price_usd` in the manifest")
                 if not isinstance(usd, (int, float)) or isinstance(usd, bool) or not (usd >= 0) or usd != usd:
                     raise SandboxError("refused", "ctx.charge: the amount must be a number of dollars, 0 or more")
                 micro = int(round(float(usd) * 1_000_000))
                 if sum(c["micro"] for c in charges) + micro > max_charge_micro:
-                    raise SandboxError("refused", f"ctx.charge: {usd} would take this run's charges past pricing.max_charge_usd ({max_charge_micro / 1_000_000})")
+                    raise SandboxError("refused", f"ctx.charge: {usd} would take this run's charges past pricing.max_price_usd ({max_charge_micro / 1_000_000})")
                 if len(charges) >= MAX_CHARGES:
                     raise SandboxError("refused", f"the run passed its cap of {MAX_CHARGES} charges")
                 if micro > 0:

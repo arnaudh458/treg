@@ -419,7 +419,7 @@ recognizes the catalog CLI and wires the credential, so `treg run` works with no
 
 A hub tool is one your team publishes for other people's agents: a JSON steps recipe, or a script in
 a sandbox. Every step runs through the team's own tools and keys; a caller pays the metered steps
-plus the price the maker set (`price_usd`), and the price lands on the maker's balance as `earned`
+plus the price the maker set, and the price lands on the maker's balance as `earned`
 credit, spendable at once. Callable the moment it is published, by id `<team-slug>.<name>`:
 `POST {BASE}/call/<id>` with the inputs as a JSON body → `{run_id, output, usage, trace}`. A new
 tool is not in search; the maker shares the id or the page `{BASE}/hub/<id>` (`.md` for agents), and
@@ -435,22 +435,21 @@ and `200` when it is on.
   README.md); `treg hub run . --input k=v` runs the folder for real, nothing stored; `treg hub
   publish .` validates, runs check.json once on your balance, and the tool is live on pass. Over
   MCP: `hub_create`, `hub_update`, `hub_mine`.
-- **Pricing** — a `pricing` block in recipe.json, or a plain `price_usd`. Your price only; the
-  provider fees (catalog steps) are billed to the caller on top. Three modes, one per tool:
-  `{"mode":"per_call","price_usd":0.02}`; `{"mode":"per_result","per_result_usd":0.002,
-  "results_from":"limit"}` (per result: your code returns an integer `results`, declared as an
-  output field; `results_from` names the `int` input whose `max` bounds one run);
-  `{"mode":"percent","percent":5}` (that percent of the run's provider fees, needs one catalog tool
-  in `uses`). Callers see what recent runs cost, low to high, fees and your price together.
+- **Pricing** — your price only; the provider fees (catalog steps) are billed to the caller on
+  top, and a failed run charges nothing. A steps recipe: `"pricing": {"price_usd": 0.02}`, a fixed
+  price per successful run. A script: `"pricing": {"max_price_usd": 0.05}`, and the price itself in
+  run.js with `ctx.charge(usd, note)`: a fee, per result (`rows.length * 0.002`), a margin
+  (`r.cost_usd * 0.2`), your vendor's cost. The caller sees the cap before the run; the run settles
+  at the sum of the lines, never above it. Callers see what recent runs cost, low to high, fees and
+  your price together.
 - **The run's spending cap** is the caller's `X-Treg-Run-Max-Cost`; when the caller sends none, the
   tool's own `"limits": {"cost_usd": 3}` in recipe.json; else $1.00. A run that would pass it is
   stopped and returns nothing, so a script making several paid calls adds up each result's
   `cost_usd` and stops early, returning what it has.
 - A script gets `ctx.inputs`, `ctx.call(target, {method, query, body, headers})` → `{status,
-  headers, json, text, cost_usd}`, `ctx.charge(usd, label)` (bill the caller for an own-key step
-  at YOUR vendor, after you have seen its answer; needs `pricing.max_charge_usd`, the most all
-  charges may total in one run, shown to the caller as part of the price), `ctx.csv(text)`,
-  `ctx.data` (the rows of the `data.csv` uploaded with the tool, ≤ 50 MB, read-only) and `ctx.log`;
+  headers, json, text, cost_usd}`, `ctx.charge(usd, note)` (your price, one line at a time, capped by
+  `pricing.max_price_usd`), `ctx.csv(text)`,
+  `ctx.data` (the rows of the `data.csv` uploaded with the tool, ≤ 5 MB, read-only) and `ctx.log`;
   no network, no files, no `require`. `target` must be in the manifest's `uses`: a catalog id, one
   of the team's own tools as `<tool>/<path>`, or a full URL under that tool's base URL. Calls in
   one `Promise.all` run at the same time, four at once; `timeout_s` in the options is that one

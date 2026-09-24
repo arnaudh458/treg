@@ -120,9 +120,9 @@ agents then built against a constitution that was wrong.
   calls: every step goes through `execute_call` under its own hold, a catalog step as the caller and
   an own-tool step as the maker; the seller's price is one more hold, settled to the maker as an
   `earned` block in one transaction (`money.settle_to_in_transaction`, the only cross-team money
-  movement). The price is `flat`, `per_unit` (a count the run returns) or `cost_plus` (a percent of
-  the run's catalog step cost); a variable price reserves the declared maximum and settles the real
-  amount, refunding the rest (`docs/hub-pricing-decisions.md`). A script runs in a separate process
+  movement). A steps recipe has one fixed price (`price_usd`); a script declares `max_price_usd` and
+  prices itself with `ctx.charge(usd, note)` lines, so the cap is held and the sum of the lines is
+  settled, the rest refunded (`docs/hub-pricing-decisions.md`). A script runs in a separate process
   with no network; `ctx.call` is its only road out and `uses` in the manifest names every host it
   may reach. A hub tool is out of catalog search until its maker lists it (`listed`), and its share
   page shows a run log of outcomes only unless the maker turns `public_log` off

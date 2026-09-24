@@ -55,8 +55,5 @@
   "limits": {
     "cost_usd": 0.5
   },
-  "pricing": {
-    "mode": "flat",
-    "price_usd": 0.02
-  }
+  "pricing": { "max_price_usd": 0.02 }
 }

@@ -28,19 +28,13 @@ MAX_SUMMARY = 200
 MAX_README = 4000
 MAX_PRICE_USD = 100.0
 MAX_COST_USD = 100.0
-MAX_MARKUP_PERCENT = 100000.0     # percent: a sane cap; the hold is bounded by the caller's ceiling
-
-# The maker's words (docs/hub-pricing-decisions.md round 3, 2026-09-18): per call, per result, or a
-# percent of the provider fees. The 2026-09-14 names stay accepted and are stored canonically.
-PRICING_MODES = ("per_call", "per_result", "percent")
-PRICING_MODE_ALIASES = {"flat": "per_call", "per_unit": "per_result", "cost_plus": "percent"}
-PRICING_KEY_ALIASES = {"per_unit_usd": "per_result_usd", "markup_percent": "percent"}
-PRICING_KEYS = frozenset({"mode", "price_usd", "per_result_usd", "results_from", "percent", "max_price_usd",
-                          "max_charge_usd"})
-# A script's own-key steps cost the MAKER at vendors treg cannot see. `ctx.charge(usd, label)` lets the
-# script bill the caller for one such step, and `pricing.max_charge_usd` is the most all charges may
-# total in one run: the caller sees it before the run (owner + Jason, 2026-09-24). Without it,
-# ctx.charge is refused.
+# One pricing rule per kind (docs/hub-pricing-decisions.md round 4, 2026-09-24):
+#   steps  -> {"price_usd": N}: a fixed price per successful run; a JSON recipe has no code to count.
+#   script -> {"max_price_usd": N}: the script prices itself with ctx.charge(usd, note) (a fee, per
+#             result, a margin on ctx.call's cost_usd, a vendor's cost); N is the most one run may
+#             charge. The caller sees N before the run, the hold is N, the run settles at the sum.
+# Stored as {"mode": "per_call", "price_usd"} or {"mode": "charge", "max_price_usd"}.
+PRICING_MODES = ("per_call", "charge")
 MAX_CHARGES_PER_RUN = 20
 
 INPUT_TYPES = ("string", "int", "float", "bool", "list", "object")
@@ -79,7 +73,7 @@ class Validated:
     uses: list[str]
     limits: dict[str, Any]    # steps, wall_s, cost_usd (cost_usd may be None)
     price_micro: int          # the flat reserve price; 0 for per_unit and cost_plus
-    pricing: dict[str, Any]   # normalized money as micro ints: mode + per_result/percent/max_price/results_max
+    pricing: dict[str, Any]   # the runner's micro view: mode, price_micro, max_charge_micro
     steps: list[dict[str, Any]] | None
     script: str | None
     output: dict[str, Any]
@@ -153,12 +147,12 @@ def validate(
         output = _validate_output_steps(raw.get("output"))
         output_fields = set(output)
 
-    pricing_public, pricing_micro = _validate_pricing(raw, uses, output_fields)
+    pricing_public, pricing_micro = _validate_pricing(raw, is_script=has_script)
     price_micro = pricing_micro["price_micro"]
 
     manifest = {
         "name": name, "summary": summary, "writes": writes, "inputs": inputs, "uses": uses,
-        "limits": limits, "price_usd": price_micro / 1_000_000, "pricing": pricing_public,
+        "limits": limits, **({} if has_script else {"price_usd": price_micro / 1_000_000}), "pricing": pricing_public,
         **({"steps": steps} if steps is not None else {"script": script}),
         "output": output,
     }
@@ -289,111 +283,45 @@ def _money_micro(field: str, raw: Any, *, allow_zero: bool) -> int:
     return int(micro)
 
 
-def _only(block: dict[str, Any], allowed: set[str], path: str) -> None:
-    """Refuse a field that this pricing mode does not use, by name."""
-    bad = sorted(set(block) - allowed)
-    if bad:
-        raise _fail(f"{path}.{bad[0]}", "not used by this mode (allowed: " + ", ".join(sorted(allowed)) + ")")
-
-
-def _validate_pricing(raw: dict[str, Any], uses: list[str],
-                      output_fields: set[str]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Return (public, micro): the normalized `pricing` block for the stored manifest, and the same
-    numbers as micro-dollar integers for the runner. Three modes, one per tool version, decided in
-    docs/hub-pricing-decisions.md (2026-09-14). A manifest with a top-level `price_usd` and no
-    `pricing` block stays flat, exactly as before."""
-    import math
-    if "pricing" not in raw:
-        micro = _validate_price(raw.get("price_usd", 0))          # legacy: a per-call price, or free
-        return ({"mode": "per_call", "price_usd": micro / 1_000_000}, _micro_block("per_call", price_micro=micro))
-    if "price_usd" in raw:
+def _validate_pricing(raw: dict[str, Any], is_script: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return (public, micro): the stored `pricing` block and the runner's micro-dollar view. A
+    steps recipe has one fixed price (`price_usd`, top level or inside `pricing`; none = free). A
+    script declares `max_price_usd`, the most its ctx.charge lines may total in one run; a script
+    with no `pricing` is free and ctx.charge is refused."""
+    block = raw.get("pricing")
+    if block is not None and not isinstance(block, dict):
+        raise _fail("pricing", "an object: {\"price_usd\": N} for a JSON recipe, {\"max_price_usd\": N} for a script")
+    block = dict(block or {})
+    stored = block.pop("mode", None) if block.get("mode") in PRICING_MODES else None
+    # A stored recipe keeps `price_usd` at the top level beside its block (the same number); a
+    # maker's file says it once.
+    if "price_usd" in raw and block and not (stored == "per_call" and raw["price_usd"] == block.get("price_usd")):
         raise _fail("price_usd", "not a top-level field when `pricing` is present; put it inside `pricing`")
-    block = raw["pricing"]
-    if not isinstance(block, dict):
-        raise _fail("pricing", "an object with `mode` and the numbers that mode needs")
-    block = canon_pricing(block)
-    extra = sorted(set(block) - PRICING_KEYS)
-    if extra:
-        raise _fail(f"pricing.{extra[0]}", "unknown key (allowed: " + ", ".join(sorted(PRICING_KEYS)) + ")")
-    mode = block.get("mode")
-    if mode not in PRICING_MODES:
-        raise _fail("pricing.mode", "one of " + ", ".join(PRICING_MODES) + " (per_call: a fixed price per "
-                    "successful run; per_result: a price per result returned; percent: a percent of the run's "
-                    "provider fees)")
-    charge_micro = (_money_micro("pricing.max_charge_usd", block.get("max_charge_usd"), allow_zero=False)
-                    if block.get("max_charge_usd") is not None else 0)
-    if charge_micro and not raw.get("script"):
-        raise _fail("pricing.max_charge_usd", "only a script tool can call ctx.charge; a JSON recipe has no own-key step to bill")
-    public_charge = {"max_charge_usd": charge_micro / 1_000_000} if charge_micro else {}
-
-    if mode == "per_call":
-        _only(block, {"mode", "price_usd", "max_charge_usd"}, "pricing")
-        micro = _money_micro("pricing.price_usd", block.get("price_usd", 0), allow_zero=True)
-        return ({"mode": "per_call", "price_usd": micro / 1_000_000, **public_charge},
-                _micro_block("per_call", price_micro=micro, max_charge_micro=charge_micro))
-
-    # An optional ceiling on the maker's part. Never required: the hold is bounded by the caller's run
-    # ceiling (percent) or by the results input (per_result); a maker who wants a lower cap may say so.
-    max_micro = (_money_micro("pricing.max_price_usd", block.get("max_price_usd"), allow_zero=False)
-                 if block.get("max_price_usd") is not None else 0)
-    public_cap = {"max_price_usd": max_micro / 1_000_000} if max_micro else {}
-
-    if mode == "per_result":
-        _only(block, {"mode", "per_result_usd", "results_from", "max_price_usd", "max_charge_usd"}, "pricing")
-        unit_micro = _money_micro("pricing.per_result_usd", block.get("per_result_usd"), allow_zero=False)
-        if max_micro and max_micro < unit_micro:
-            raise _fail("pricing.max_price_usd", "at least `per_result_usd`")
-        if not ({"results", "units"} & output_fields):
-            raise _fail("output", "a per_result tool must return an integer `results` field (the count to bill)")
-        results_from = block.get("results_from")
-        results_max = 0
-        if results_from is not None:
-            spec = (raw.get("inputs") or {}).get(results_from) if isinstance(raw.get("inputs"), dict) else None
-            if (not isinstance(results_from, str) or not isinstance(spec, dict) or spec.get("type") != "int"
-                    or not isinstance(spec.get("max"), int) or spec["max"] < 1):
-                raise _fail("pricing.results_from", "the name of an `int` input with a `max` (the most results one run returns)")
-            results_max = int(spec["max"])
-        elif not max_micro:
-            raise _fail("pricing.results_from", "name the `int` input whose `max` bounds the results (or give `max_price_usd`)")
-        public = {"mode": "per_result", "per_result_usd": unit_micro / 1_000_000, **public_cap, **public_charge}
-        if results_from is not None:
-            public["results_from"] = results_from
-        return (public, _micro_block("per_result", per_result_micro=unit_micro, max_price_micro=max_micro,
-                                     results_from=results_from, results_max=results_max,
-                                     max_charge_micro=charge_micro))
-
-    # percent: the maker earns that percent of the run's provider fees (the catalog steps).
-    _only(block, {"mode", "percent", "max_price_usd", "max_charge_usd"}, "pricing")
-    mp: Any = block.get("percent")
-    if not _is_number(mp) or not math.isfinite(float(mp)) or mp <= 0 or mp > MAX_MARKUP_PERCENT:
-        raise _fail("pricing.percent", f"a number above 0 and at most {MAX_MARKUP_PERCENT}")
-    percent_micro = round(float(mp) / 100 * 1_000_000)             # 30 percent -> 300000
-    if abs(percent_micro - float(mp) / 100 * 1_000_000) > 1e-6:
-        raise _fail("pricing.percent", "at most 4 decimal places")
-    if not any("." in u for u in uses):
-        raise _fail("pricing.mode",
-                    "percent needs at least one catalog tool in `uses` (an own-tool run has no provider fees)")
-    return ({"mode": "percent", "percent": float(mp), **public_cap, **public_charge},
-            _micro_block("percent", percent_micro=percent_micro, max_price_micro=max_micro,
-                         max_charge_micro=charge_micro))
+    if is_script:
+        if "price_usd" in raw or "price_usd" in block:
+            raise _fail("pricing.price_usd", "a script prices itself with ctx.charge(usd, note); declare "
+                        "`pricing.max_price_usd`, the most one run may charge")
+        bad = sorted(set(block) - {"max_price_usd"})
+        if bad:
+            raise _fail(f"pricing.{bad[0]}", "a script's pricing is only `max_price_usd`; ctx.charge(usd, note) "
+                        "in run.js sets the amount (a fee, per result, a margin, a vendor's cost)")
+        if "max_price_usd" not in block:
+            return {"mode": "charge", "max_price_usd": 0}, _micro_block("charge")
+        cap = _money_micro("pricing.max_price_usd", block["max_price_usd"], allow_zero=False)
+        return {"mode": "charge", "max_price_usd": cap / 1_000_000}, _micro_block("charge", max_charge_micro=cap)
+    bad = sorted(set(block) - {"price_usd"})
+    if bad:
+        raise _fail(f"pricing.{bad[0]}", "a JSON recipe's pricing is only `price_usd`, a fixed price per "
+                    "successful run; a variable price needs a script and ctx.charge")
+    micro = (_money_micro("pricing.price_usd", block["price_usd"], allow_zero=True) if "price_usd" in block
+             else _validate_price(raw.get("price_usd", 0)))
+    return {"mode": "per_call", "price_usd": micro / 1_000_000}, _micro_block("per_call", price_micro=micro)
 
 
-def _micro_block(mode: str, *, price_micro: int = 0, per_result_micro: int = 0, percent_micro: int = 0,
-                 max_price_micro: int = 0, results_from: str | None = None, results_max: int = 0,
-                 max_charge_micro: int = 0) -> dict[str, Any]:
-    """The runner's view of a pricing block: every key present, micro-dollar ints, 0 = none."""
-    return {"mode": mode, "price_micro": price_micro, "per_result_micro": per_result_micro,
-            "percent_micro": percent_micro, "max_price_micro": max_price_micro,
-            "results_from": results_from, "results_max": results_max, "max_charge_micro": max_charge_micro}
-
-
-def canon_pricing(block: dict[str, Any]) -> dict[str, Any]:
-    """A pricing block with the 2026-09-18 names: the old mode names and keys map onto them, so a
-    stored manifest from before the rename reads the same."""
-    out = {PRICING_KEY_ALIASES.get(k, k): v for k, v in block.items()}
-    if "mode" in out:
-        out["mode"] = PRICING_MODE_ALIASES.get(out["mode"], out["mode"])
-    return out
+def _micro_block(mode: str, *, price_micro: int = 0, max_charge_micro: int = 0) -> dict[str, Any]:
+    """The runner's view of a pricing block, in micro-dollars: `price_micro` is a JSON recipe's
+    fixed price, `max_charge_micro` the most a script's ctx.charge lines may total in one run."""
+    return {"mode": mode, "price_micro": price_micro, "max_charge_micro": max_charge_micro}
 
 
 def _validate_steps(raw: Any, uses: list[str], max_steps: int) -> list[dict[str, Any]]:
@@ -464,104 +392,60 @@ def own_names(uses: list[str]) -> set[str]:
 
 
 def pricing_micro(manifest: dict[str, Any]) -> dict[str, Any]:
-    """The stored `pricing` block as micro-dollar integers, for the runner. A manifest from before
-    the pricing block (only `price_usd`) reads as flat. The keys mirror Validated.pricing:
-    mode, price_micro, per_unit_micro, markup_micro, max_price_micro."""
-    p = _stored_pricing(manifest)
+    """The stored `pricing` block as the runner's micro-dollar view (see `_micro_block`). A
+    manifest from before the block (only `price_usd`) reads as a fixed price."""
+    p = stored_pricing(manifest)
 
     def m(x: Any) -> int:
         return int(round(float(x or 0) * 1_000_000))
 
-    mode = p.get("mode", "per_call")
-    cap = m(p.get("max_price_usd")) if p.get("max_price_usd") else 0
-    charge = m(p.get("max_charge_usd")) if p.get("max_charge_usd") else 0
-    if mode == "per_result":
-        rf = p.get("results_from")
-        spec = (manifest.get("inputs") or {}).get(rf) if rf else None
-        results_max = int(spec.get("max", 0)) if isinstance(spec, dict) else 0
-        return _micro_block("per_result", per_result_micro=m(p["per_result_usd"]), max_price_micro=cap,
-                            results_from=rf, results_max=results_max, max_charge_micro=charge)
-    if mode == "percent":
-        return _micro_block("percent", percent_micro=int(round(float(p["percent"]) / 100 * 1_000_000)),
-                            max_price_micro=cap)
-    return _micro_block("per_call", price_micro=m(p.get("price_usd", 0)), max_charge_micro=charge)
+    if p["mode"] == "charge":
+        return _micro_block("charge", max_charge_micro=m(p.get("max_price_usd")))
+    return _micro_block("per_call", price_micro=m(p.get("price_usd")))
 
 
-def _stored_pricing(manifest: dict[str, Any]) -> dict[str, Any]:
-    """The pricing block of a stored manifest in canonical names; a manifest from before the block
-    (only `price_usd`) reads as per_call."""
-    return canon_pricing(manifest.get("pricing") or {"mode": "per_call", "price_usd": manifest.get("price_usd", 0)})
+def stored_pricing(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The pricing block of a stored manifest: {"mode": "per_call", "price_usd"} or
+    {"mode": "charge", "max_price_usd"}. A manifest with only a top-level `price_usd` is per_call."""
+    p = manifest.get("pricing") or {}
+    if p.get("mode") == "charge":
+        return {"mode": "charge", "max_price_usd": float(p.get("max_price_usd") or 0)}
+    return {"mode": "per_call", "price_usd": float(p.get("price_usd", manifest.get("price_usd", 0)) or 0)}
 
 
 def price_label(manifest: dict[str, Any]) -> str:
-    """The maker's price in the maker's words: "$0.15 per call", "$0.02 per result", "5% of provider
-    fees". What the maker earns on a successful run; the provider fees (the metered steps) are billed
-    to the caller on top. A caller reads `range_label` instead."""
-    p = _stored_pricing(manifest)
-    mode = p.get("mode", "per_call")
-    if mode == "per_result":
-        return f"${float(p['per_result_usd']):.6g} per result" + _charge_suffix(p)
-    if mode == "percent":
-        return f"{float(p['percent']):.6g}% of provider fees" + _charge_suffix(p)
-    price = float(p.get("price_usd", 0) or 0)
-    base = f"${price:.6g} per call" if price else "free"
-    return base + _charge_suffix(p)
+    """The maker's price in the maker's words: "$0.15 a run", "up to $0.05 a run", "free". What
+    the maker earns on a successful run; the provider fees (the metered steps) are billed to the
+    caller on top. A caller reads `range_label` instead."""
+    p = stored_pricing(manifest)
+    if p["mode"] == "charge":
+        return f"up to ${p['max_price_usd']:.6g} a run" if p["max_price_usd"] else "free"
+    return f"${p['price_usd']:.6g} a run" if p["price_usd"] else "free"
 
 
-def _charge_suffix(p: dict[str, Any]) -> str:
-    """The run-level cap on ctx.charge lines, when the tool declares one: the caller reads it as
-    part of the price, since those lines are billed to them."""
-    cap = p.get("max_charge_usd")
-    return f" + own-key steps up to ${float(cap):.6g} per run" if cap else ""
-
-
-def results_of(output: Any) -> int | None:
-    """The integer count a per_result run returns (`results`, or the older `units`), else None."""
-    if not isinstance(output, dict):
-        return None
-    u = output.get("results", output.get("units"))
-    return u if isinstance(u, int) and not isinstance(u, bool) and u >= 0 else None
-
-
-def seller_part_micro(manifest: dict[str, Any], steps_micro: int, observed_price_micro: int | None,
-                      output: Any = None) -> int:
+def seller_part_micro(manifest: dict[str, Any], observed_price_micro: int | None, charged_micro: int = 0) -> int:
     """What the seller earns on one run, for the price range: the observed price when a caller
-    paid one (`observed_price_micro`, a run by another team), else derived from the pricing block
-    and the run itself (the maker's own runs and the checks pay no seller price, but a caller
-    would have): per_call, the price; percent, that percent of `steps_micro`; per_result, the
-    count the run returned times the per-result price. A declared cap applies when present."""
+    paid one (a run by another team), else what a caller would have paid (the maker's own runs and
+    the checks pay no seller price): the fixed price, or the sum of the run's ctx.charge lines."""
     if observed_price_micro is not None:
         return int(observed_price_micro)
     p = pricing_micro(manifest)
-    cap = p["max_price_micro"] or None
-    if p["mode"] == "percent":
-        part = (int(steps_micro) * p["percent_micro"] + 500_000) // 1_000_000
-    elif p["mode"] == "per_result":
-        part = (results_of(output) or 0) * p["per_result_micro"]
-    else:
-        part = p["price_micro"]
-    return min(part, cap) if cap else part
+    return charged_micro if p["mode"] == "charge" else p["price_micro"]
 
 
 def range_label(manifest: dict[str, Any], low_micro: int | None, high_micro: int | None) -> str:
     """The headline price a caller reads: what one successful run has actually cost, steps and
-    seller price together, over recent runs (docs/hub-pricing-decisions.md, 2026-09-18). One
-    number when every run cost the same, a range otherwise, and before any run the declared
-    worst case with the steps unknown."""
-    p = _stored_pricing(manifest)
-    mode = p.get("mode", "per_call")
+    seller price together, over recent runs (docs/hub-pricing-decisions.md). One number when
+    every run cost the same, a range otherwise, and before any run the declared price with the
+    steps unknown."""
+    p = stored_pricing(manifest)
     fees = " + provider fees" if any("." in u for u in manifest.get("uses", [])) else ""
-    lead = f"${float(p['per_result_usd']):.6g}/result" if mode == "per_result" else ""
     if low_micro is None or high_micro is None:
-        if mode == "per_result":
-            return lead + fees
-        if mode == "percent":
-            return f"provider fees + {float(p['percent']):.6g}%"
-        price = float(p.get("price_usd", 0) or 0)
-        return (f"${price:.6g}/run" if price else "free") + fees
+        if p["mode"] == "charge":
+            return (f"up to ${p['max_price_usd']:.6g}/run" if p["max_price_usd"] else "free") + fees
+        return (f"${p['price_usd']:.6g}/run" if p["price_usd"] else "free") + fees
     lo, hi = low_micro / 1_000_000, high_micro / 1_000_000
-    span = (f"${lo:.6g}/run" if low_micro else "free") if low_micro == high_micro else f"${lo:.6g}–${hi:.6g}/run"
-    return f"{lead} · {span}" if lead else span
+    return (f"${lo:.6g}/run" if low_micro else "free") if low_micro == high_micro else f"${lo:.6g}–${hi:.6g}/run"
 
 
 def _bad_ref(value: Any) -> str | None:

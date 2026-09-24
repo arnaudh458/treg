@@ -174,12 +174,9 @@ async def run_hub_tool(
     catalog = catalog_store.load()
     own_tools = {u for u in manifest["uses"] if "." not in u}
     pricing = hub_manifest.pricing_micro(manifest)
-    reserve_micro = _worst_case(pricing, inputs, ceiling)
-    # A script may bill own-key steps through ctx.charge; `max_charge_micro` is the most ALL its
-    # charges may total in one run. That amount is held with the fee, on the same hold, and the
-    # caller sees `max_charge_usd` in the contract before running. Settled at what was charged.
-    charge_cap = int((pricing or {}).get("max_charge_micro") or 0)
-    reserve_micro += charge_cap
+    # The hold is the most the maker can earn on this run: a recipe's fixed price, or a script's
+    # `max_price_usd` (the cap on its ctx.charge lines, which the caller saw before the run).
+    reserve_micro = pricing["price_micro"] + pricing["max_charge_micro"]
     price_held = await _reserve_price(parent, tool, run_id, reserve_micro)
     if price_held > ceiling:
         await _close_price(tool, run_id, price_held, success=False, reason="hub_run_max_cost")
@@ -352,19 +349,7 @@ async def run_hub_tool(
             raise ResolutionFailed("hub_run_failed", status_code=stop.status, detail=_public_detail(detail))
 
         output = refs.resolve(manifest["output"], scope, g.positions)
-        try:
-            price_now = _final_price(pricing, output, spent, price_held)
-        except _PriceInvalid as exc:
-            await _close_price(tool, run_id, price_held, success=False, reason="hub_units_invalid")
-            detail = {"error": "hub_units_invalid", "run_id": run_id,
-                      "recipe": f"{tool.tool_id}@{tool.version}", "charged_micro": spent,
-                      "price_micro": 0, "trace": trace, "message": exc.args[0]}
-            await _record(tool, parent, run_id, "failed", counted, spent, ms_total,
-                          masked(manifest["inputs"], inputs), trace, error=detail)
-            _audit_parent(parent, tool, 424, spent, audit_client)
-            raise ResolutionFailed("hub_run_failed", status_code=424, detail=_public_detail(detail))
-        actual = None if pricing["mode"] == "per_call" else price_now
-        earned = await _close_price(tool, run_id, price_held, success=True, actual=actual)
+        earned = await _close_price(tool, run_id, price_held, success=True)
         body_out = {
             "run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}", "output": output,
             "usage": {"cost_micro": spent + earned, "steps_micro": spent, "price_micro": earned,
@@ -401,8 +386,8 @@ async def run_hub_tool(
             "message": "the run could not finish; the maker's log has the detail"}) from exc
 
 async def _reserve_price(parent: CallContext, tool: HubTool, run_id: str, reserve_micro: int) -> int:
-    """Open the price hold for `reserve_micro`: the per-call price, or `_worst_case` for a variable
-    price (the most the maker can earn on this run is held, the rest is refunded at settle). Returns
+    """Open the price hold for `reserve_micro`: a recipe's fixed price, or a script's cap on its
+    ctx.charge lines (the most the maker can earn on this run; the rest is refunded at settle). Returns
     the amount held (0 when nothing is owed). Raises ResolutionFailed 402 `hub_price_unaffordable` when the
     caller cannot afford it."""
     from ...domain import money as ledger
@@ -446,52 +431,6 @@ async def _close_price(tool: HubTool, run_id: str, held: int, *, success: bool, 
                                                 meta={"tool_id": tool.tool_id, "run_id": run_id})
         await s.commit()
     return earned
-
-
-class _PriceInvalid(Exception):
-    """A per_result tool returned no usable `results`. The run fails, the maker earns nothing."""
-
-
-def _worst_case(pricing: dict[str, Any], inputs: dict[str, Any], ceiling: int) -> int:
-    """The most the maker can earn on THIS run, held before it starts (docs/hub-pricing-decisions.md
-    round 3, 2026-09-18: the maker never declares a cap; the hold comes from what bounds the run).
-    per_call: the price. percent: that percent of the largest provider fee that fits under the
-    caller's ceiling, since fees + part <= ceiling. per_result: the per-result price times the
-    caller's `results_from` input (already clamped to its `max`), else the declared cap. A declared
-    `max_price_usd` lowers any of these."""
-    mode = pricing.get("mode", "per_call")
-    cap = pricing.get("max_price_micro") or 0
-    if mode == "percent":
-        pm = pricing["percent_micro"]
-        worst = (ceiling * pm) // (1_000_000 + pm)
-    elif mode == "per_result":
-        rf = pricing.get("results_from")
-        bound = inputs.get(rf) if rf else None
-        worst = (int(bound) * pricing["per_result_micro"]) if isinstance(bound, int) and bound >= 0 else cap
-    else:
-        worst = pricing.get("price_micro", 0)
-    return min(worst, cap) if cap else worst
-
-
-def _final_price(pricing: dict[str, Any], output: dict[str, Any], spent: int, held: int = 0) -> int:
-    """The real price of one successful run, in micro-dollars. per_call: the price. per_result: the
-    integer `results` (or `units`) the tool returned times the per-result price. percent: that
-    percent of the run's provider fees (`spent`). Never more than what was held (`held`, when a
-    hold exists) nor than a declared cap. Decisions in docs/hub-pricing-decisions.md."""
-    mode = pricing.get("mode", "per_call")
-    if mode == "per_result":
-        u = hub_manifest.results_of(output)
-        if u is None:
-            raise _PriceInvalid("run(ctx) must return an integer `results` of 0 or more for a per_result tool")
-        earned = u * pricing["per_result_micro"]
-    elif mode == "percent":
-        earned = (spent * pricing["percent_micro"] + 500_000) // 1_000_000
-    else:
-        earned = pricing.get("price_micro", 0)
-    cap = pricing.get("max_price_micro") or 0
-    if cap:
-        earned = min(earned, cap)
-    return min(earned, held) if held > 0 else earned
 
 
 class _StepFailed:
@@ -845,27 +784,15 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
                       masked(manifest["inputs"], inputs), trace, error=detail, log=log)
         _audit_parent(parent, tool, 424, spent, audit_client)
         raise ResolutionFailed("hub_run_failed", status_code=424, detail=_public_detail(detail))
-    # ctx.charge lines: each one a trace entry the caller reads (label, amount, whose step), and the
-    # sum joins the maker's price on the same hold. A charge is the maker's word, bounded by the cap
-    # the caller saw; a run that failed above never reaches here, so its charges are released.
+    # ctx.charge lines ARE the script's price: each one a trace entry the caller reads (note,
+    # amount), their sum settled to the maker from the hold and the rest refunded. The sandbox kept
+    # the sum under the cap the caller saw; a run that failed above never reaches here, so its
+    # charges are released.
     charged_micro = sum(c["micro"] for c in charges)
     for i, c in enumerate(charges):
-        trace.append({"wave": counted + i, "name": f"charge{i + 1}", "call": c["label"] or "own-key step",
+        trace.append({"wave": counted + i, "name": f"charge{i + 1}", "call": c["label"] or "charge",
                       "outcome": "charged", "status": None, "ms": 0, "cost_micro": c["micro"], "key": "team"})
-    try:
-        price_now = _final_price(pricing or {"mode": "per_call", "price_micro": 0}, output, spent, price_held)
-        price_now = min(price_now + charged_micro, price_held) if price_held > 0 else price_now + charged_micro
-    except _PriceInvalid as exc:
-        await _close_price(tool, run_id, price_held, success=False, reason="hub_units_invalid")
-        detail = {"error": "hub_units_invalid", "run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}",
-                  "charged_micro": spent, "price_micro": 0, "trace": trace, "log": log,
-                  "message": exc.args[0]}
-        await _record(tool, parent, run_id, "failed", counted, spent, ms_total,
-                      masked(manifest["inputs"], inputs), trace, error=detail, log=log)
-        _audit_parent(parent, tool, 424, spent, audit_client)
-        raise ResolutionFailed("hub_run_failed", status_code=424, detail=_public_detail(detail))
-    actual = None if ((pricing or {}).get("mode", "per_call") == "per_call" and not charges) else price_now
-    earned = await _close_price(tool, run_id, price_held, success=True, actual=actual)
+    earned = await _close_price(tool, run_id, price_held, success=True, actual=min(charged_micro, price_held))
     body_out = {"run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}", "output": output,
                 "usage": {"cost_micro": spent + earned, "steps_micro": spent, "price_micro": earned,
                           **({"charged_micro": charged_micro} if charges else {}),

@@ -11,6 +11,5 @@
   },
   "uses": ["sheets"],
   "script": "run.js",
-  "output": {"fields": ["rows", "count"]},
-  "price_usd": 0
+  "output": {"fields": ["rows", "count"]}
 }

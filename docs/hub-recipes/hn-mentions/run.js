@@ -24,5 +24,6 @@ export default async function run(ctx) {
     };
   });
   ctx.log(hits.length + " of " + r.json.nbHits + " matches returned");
+  ctx.charge(0.002, "fee");                              // the price: $0.002 a run
   return { query, hits, count: hits.length, total_matches: r.json.nbHits };
 }

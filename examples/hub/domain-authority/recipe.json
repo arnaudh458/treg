@@ -9,5 +9,5 @@
   "script": "run.js",
   "output": { "fields": ["domain", "search_engine", "verdict", "report", "top_keywords", "top_linking_domains", "linking_domains_total", "reports_answered", "failed", "summary"] },
   "limits": { "cost_usd": 0.1 },
-  "pricing": { "mode": "flat", "price_usd": 0.01 }
+  "pricing": { "max_price_usd": 0.01 }
 }

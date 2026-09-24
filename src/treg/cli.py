@@ -5197,7 +5197,7 @@ _HUB_STEPS_SKELETON = {
     "steps": [{"name": "fetch", "call": "my-api/v1/items",
                "input": {"q": "$input.query", "limit": "$input.limit"}}],
     "output": {"items": "$fetch"},
-    "pricing": {"mode": "per_call", "price_usd": 0},
+    "pricing": {"price_usd": 0},
 }
 _HUB_SCRIPT_SKELETON = {
     "name": None,
@@ -5207,12 +5207,14 @@ _HUB_SCRIPT_SKELETON = {
     "uses": ["my-api"],
     "script": "run.js",
     "output": {"fields": ["items", "count"]},
-    "pricing": {"mode": "per_call", "price_usd": 0},
+    "pricing": {"max_price_usd": 0.05},
 }
 _HUB_RUN_JS = """// The whole surface a script gets:
 //   ctx.inputs                                  the caller's inputs, checked against recipe.json
 //   ctx.call(target, {method, query, body, headers})   one treg call -> {status, headers, json, text}
 //   ctx.log(text)                               one line the maker reads in the run log
+//   ctx.charge(usd, note)                       your price, one line at a time; the sum never
+//                                               passes pricing.max_price_usd in recipe.json
 // No network, no files, no require: every road out is ctx.call. Never paste a key here - register
 // it first (treg secret add / treg tool add), list the tool in `uses`, and name it in ctx.call.
 //
@@ -5224,6 +5226,7 @@ export default async function run(ctx) {
   if (r.status !== 200) throw new Error("my-api answered " + r.status);
   const items = Array.isArray(r.json) ? r.json : [];
   ctx.log(items.length + " items");
+  ctx.charge(items.length * 0.001, "per item");   // your price: $0.001 per item, at most $0.05
   return { items, count: items.length };
 }
 """
@@ -5460,7 +5463,7 @@ def cmd_hub_price(args, cfg) -> None:
     d = r.json()
     _section("Price changed")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
-    _kv("price", f"${d['price_usd']:.6g} per call  (${d['price_usd'] * 1000:,.2f} per 1,000 runs); applies to later runs")
+    _kv("price", f"{d.get('price_label', '')}; applies to later runs")
 
 
 def cmd_hub_ls(args, cfg) -> None:
@@ -6578,8 +6581,9 @@ def build_parser() -> argparse.ArgumentParser:
     h_earn.add_argument("--days", type=int, default=90)
     h_earn.add_argument("--csv", action="store_true", help="print CSV instead of the table")
     h_earn.set_defaults(fn=cmd_hub_earnings)
-    h_price = mk(hs, "price", "Change what a caller pays you per successful run (applies to later runs, no version bump).",
-                 "treg hub price acme.leads-db 0.02", "treg hub price acme.leads-db 0   # free")
+    h_price = mk(hs, "price", "Change a tool's price for later runs, no version bump: a JSON recipe's fixed price per run, "
+                 "or a script's max_price_usd (the cap on its ctx.charge lines).",
+                 "treg hub price acme.leads-db 0.02", "treg hub price acme.leads-db 0   # free (a JSON recipe)")
     h_price.add_argument("tool_id"); h_price.add_argument("price_usd", type=float)
     h_price.set_defaults(fn=cmd_hub_price)
     h_list = mk(hs, "list", "List one of your tools in the catalog: it appears in search (newest live version, no version bump).",

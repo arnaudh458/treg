@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
-from ...domain.hub import ManifestError, canon_pricing, price_label, validate, validate_check, validate_readme
+from ...domain.hub import ManifestError, price_label, stored_pricing, validate, validate_check, validate_readme
 from ...models import HubTool, Org, Tool
 
 HUB_ID_MIN_PARTS = 2
@@ -232,20 +232,21 @@ async def price_ranges(db: AsyncSession, tools: dict[str, dict[str, Any]], *, da
     since = utcnow_naive() - timedelta(days=days)
     recent = (HubRun.tool_id.in_(list(tools)), HubRun.version > 0, HubRun.status == "ok", HubRun.started_at >= since)
     own = HubRun.caller_org_id == HubRun.maker_org_id
-    # The output (up to 2 MB a run) is read only where the seller part is derived from it: the maker's
-    # own runs of a per_result tool. Catalog search calls this for every listed tool.
-    per_result = [tid for tid, m in tools.items()
-                  if canon_pricing(m.get("pricing") or {}).get("mode") == "per_result"]
-    outputs: dict[int, Any] = {}
-    if per_result:
-        outputs = dict((await db.execute(select(HubRun.id, HubRun.output).where(
-            *recent, own, HubRun.tool_id.in_(per_result)))).all())
+    # The trace is read only where the seller part is derived from it: the maker's own runs of a
+    # script, whose ctx.charge lines say what a caller would have paid.
+    scripts = [tid for tid, m in tools.items() if stored_pricing(m)["mode"] == "charge"]
+    charged: dict[int, int] = {}
+    if scripts:
+        for rid, trace in (await db.execute(select(HubRun.id, HubRun.trace).where(
+                *recent, own, HubRun.tool_id.in_(scripts)))).all():
+            charged[rid] = sum(int(e.get("cost_micro") or 0) for e in (trace or [])
+                               if isinstance(e, dict) and e.get("outcome") == "charged")
     out: dict[str, dict[str, Any]] = {}
     for rid, tid, cost, price, is_own in (await db.execute(
             select(HubRun.id, HubRun.tool_id, HubRun.cost_micro, HubRun.price_micro, own)
             .where(*recent))).all():
-        total = int(cost or 0) + seller_part_micro(tools[tid], int(cost or 0), None if is_own else int(price or 0),
-                                                   outputs.get(rid))
+        total = int(cost or 0) + seller_part_micro(tools[tid], None if is_own else int(price or 0),
+                                                   charged.get(rid, 0))
         r = out.setdefault(tid, {"low_micro": total, "high_micro": total, "samples": 0})
         r["low_micro"], r["high_micro"] = min(r["low_micro"], total), max(r["high_micro"], total)
         r["samples"] += 1
@@ -266,15 +267,11 @@ def with_range(manifest: dict[str, Any], rng: dict[str, Any] | None) -> dict[str
 
 def worst_usd(manifest: dict[str, Any], price_micro: int, rng: dict[str, Any] | None) -> float | None:
     """`cost.usd` for a hub row: the most a run has cost recently (steps and seller part) when runs
-    exist, else the per-call price, else a declared cap, else None (a variable price with no run
-    yet has no number to promise)."""
-    from ...domain.hub import canon_pricing
+    exist, else the declared price: a recipe's fixed price or a script's cap."""
     if rng and rng.get("samples"):
         return rng["high_micro"] / 1_000_000
-    p = canon_pricing(manifest.get("pricing") or {"mode": "per_call", "price_usd": price_micro / 1_000_000})
-    if p.get("mode", "per_call") == "per_call":
-        return float(p.get("price_usd", price_micro / 1_000_000) or 0)
-    return float(p["max_price_usd"]) if p.get("max_price_usd") else None
+    p = stored_pricing({"price_usd": price_micro / 1_000_000, **manifest})
+    return p["max_price_usd"] if p["mode"] == "charge" else p["price_usd"]
 
 
 def view(row: HubTool) -> dict[str, Any]:
@@ -283,7 +280,7 @@ def view(row: HubTool) -> dict[str, Any]:
     return {
         "tool_id": row.tool_id, "version": row.version, "kind": row.kind, "status": row.status,
         "summary": row.summary, "writes": row.writes, "price_usd": row.price_micro / 1_000_000,
-        "pricing": canon_pricing(row.manifest.get("pricing") or {"mode": "per_call", "price_usd": row.price_micro / 1_000_000}),
+        "pricing": stored_pricing({"price_usd": row.price_micro / 1_000_000, **row.manifest}),
         "listed": bool(row.listed), "public_log": bool(row.public_log),
         "price_label": price_label(row.manifest),
         "uses": row.manifest.get("uses", []), "inputs": row.manifest.get("inputs", {}),
@@ -326,17 +323,22 @@ async def retire(db: AsyncSession, *, org_id: int, tool_id: str) -> int:
 
 async def set_price(db: AsyncSession, *, org_id: int, tool_id: str, price_usd: float) -> HubTool | None:
     """The price applies to later runs of the newest live version (round 3 q8): no version bump,
-    every trace stamps the price it paid. Returns the row, or None when the team has no such
-    live tool. Does not commit."""
+    every trace stamps the price it paid. A JSON recipe's `price_usd`; a script's `max_price_usd`,
+    the cap on its ctx.charge lines (above 0: a script's amounts live in run.js). Returns the row,
+    or None when the team has no such live tool. Does not commit."""
     from ...domain.hub import manifest as hub_manifest
-    micro = hub_manifest._validate_price(price_usd)
     row = (await db.execute(select(HubTool).where(
         HubTool.tool_id == tool_id, HubTool.org_id == org_id, HubTool.status == "live")
         .order_by(HubTool.version.desc()).limit(1))).scalars().first()
     if row is None:
         return None
-    # `treg hub price` sets one per-call price, so the pricing block is normalized to per_call (a
-    # maker who wants a variable price publishes a new version with a `pricing` block).
+    if row.kind == "script":
+        micro = hub_manifest._money_micro("max_price_usd", price_usd, allow_zero=False)
+        row.manifest = {**{k: v for k, v in row.manifest.items() if k != "price_usd"},
+                        "pricing": {"mode": "charge", "max_price_usd": micro / 1_000_000}}
+        db.add(row)
+        return row
+    micro = hub_manifest._validate_price(price_usd)
     row.price_micro = micro
     row.manifest = {**row.manifest, "price_usd": micro / 1_000_000,
                     "pricing": {"mode": "per_call", "price_usd": micro / 1_000_000}}

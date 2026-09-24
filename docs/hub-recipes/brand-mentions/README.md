@@ -9,5 +9,6 @@ Each mention has `source`, `url`, `author`, `where` (subreddit or x), `created_a
 600 characters) and `engagement`. X search goes through treg's router, so the cheapest X provider
 answers.
 
-Priced `per_result`: $0.002 per mention returned, on top of the provider fees (about $0.003 per
-run). `limit` (up to 50) bounds the hold; a run that finds nothing pays only the fees.
+Priced in the script: `ctx.charge(mentions.length * 0.002, "per mention")`, on top of the provider
+fees (about $0.003 per run), capped at `max_price_usd` $0.10 (50 mentions, the most `limit` allows).
+A run that finds nothing pays only the fees.

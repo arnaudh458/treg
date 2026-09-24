@@ -25,15 +25,14 @@ hubRunCost(t){ const lo=t.price_low_micro, hi=t.price_high_micro;
   if(lo==null||hi==null) return '—';
   return lo===hi ? this.money(lo) : this.money(lo)+'–'+this.money(hi); },
 hubPriceExplain(t){ const p=t.pricing||{};
-  if(p.mode==='per_result') return 'You earn $'+p.per_result_usd+' for each result a successful run returns (its integer `results` field)'
-    +(p.results_from?'; the hold is bounded by the `'+p.results_from+'` input.':'.')+(p.max_price_usd?' At most $'+p.max_price_usd+' a run.':'');
-  if(p.mode==='percent') return 'You earn '+p.percent+'% of the provider fees each successful run spends.'+(p.max_price_usd?' At most $'+p.max_price_usd+' a run.':'');
+  if(p.mode==='charge') return p.max_price_usd ? 'Your script sets each run\'s price with ctx.charge(usd, note), at most $'+p.max_price_usd+' a run. A failed run charges nothing.'
+    : 'Free: the script declares no max_price_usd, so ctx.charge is refused. Callers pay only the provider fees.';
   return Number(p.price_usd||0) ? 'You earn $'+p.price_usd+' on each successful run.' : 'Free: callers pay only the provider fees.'; },
 hubPricePrompt(t){ return 'Change the price of my treg hub tool '+t.tool_id+' (now: '+t.price_label+').\n'
-  +'New price: <describe it, e.g. "$0.05 per call", "$0.01 per result, at most $0.50 a run", "15% of the provider fees">.\n\n'
-  +'Edit the `pricing` block in its recipe.json. Modes: {"mode":"per_call","price_usd":N} | '
-  +'{"mode":"per_result","per_result_usd":N,"results_from":"<int input with a max>"} (the script returns an integer `results`) | '
-  +'{"mode":"percent","percent":N} (needs a catalog tool in `uses`). `max_price_usd` optionally caps the two variable modes. '
+  +'New price: <describe it, e.g. "$0.05 per call", "$0.01 per result, at most $0.50 a run", "15% on top of the provider fees">.\n\n'
+  +(t.kind==='script'
+    ? 'It is a script: set `"pricing": {"max_price_usd": N}` in recipe.json (the most one run may charge) and bill in run.js with ctx.charge(usd, note): a fee, per result (rows.length * 0.01), or a margin (r.cost_usd * 0.15 on a ctx.call result). '
+    : 'It is a JSON steps recipe: set `"pricing": {"price_usd": N}` in recipe.json, a fixed price per successful run. A variable price needs a script and ctx.charge. ')
   +'Work in the folder it was published from, then run `treg hub publish <folder>` and confirm the new version is live (`treg hub ls`).'; },
 async setHubFlag(field, value){ if(!this.hub.tool) return; this.hub.flagSaving=true; this.hub.err='';
   try{ const d=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id), {method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({[field]:!!value})});

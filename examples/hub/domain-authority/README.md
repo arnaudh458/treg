@@ -23,7 +23,7 @@ A plain rule, in code, so it can be argued with:
 
 ## What it costs
 
-$0.0025 + $0.0005 + $0.0005 = **$0.0035** in Serpstat calls, plus a flat **$0.01** for the tool.
+$0.0025 + $0.0005 + $0.0005 = **$0.0035** in Serpstat calls, plus **$0.01** for the tool (`ctx.charge(0.01, "fee")`).
 Serpstat is a database, not a scraper: a run takes a few seconds.
 
 ## Limits

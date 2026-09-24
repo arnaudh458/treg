@@ -512,25 +512,25 @@ day for 30 days: time, outcome, duration, steps, units and the price paid, and n
 the inputs, or the output. The dashboard has the same two switches under Hub → a tool → Listing.
 
 The folder may carry a fifth file, `data.csv` (≤ 50 MB): the script reads it as `ctx.data`. A
-script gets `ctx.inputs`, `ctx.call(target, {method, query, body, headers})`, `ctx.csv(text)`,
-`ctx.data`, `ctx.log(text)`; `target` is a catalog id, one of your own tools as `<tool>/<path>`,
+script gets `ctx.inputs`, `ctx.call(target, {method, query, body, headers})`, `ctx.charge(usd, note)`,
+`ctx.csv(text)`, `ctx.data`, `ctx.log(text)`; `target` is a catalog id, one of your own tools as `<tool>/<path>`,
 or a full URL under such a tool's base URL. Never paste a credential into a script: register it
 first (`treg secret add`, `treg tool add`), list the tool in `uses`, name it in `ctx.call`.
 Callers run it with `treg call <id> --data '{…}'`; read its contract with `treg catalog get <id>`.
 
-**Pricing.** `recipe.json` carries either a `price_usd`, or a `pricing` block with a `mode`. It is
-your price only: the provider fees (the catalog steps) are billed to the caller on top.
+**Pricing.** It is your price only: the provider fees (the catalog steps) are billed to the caller
+on top, and a failed run charges nothing.
 
-| mode | fields | you earn per successful run |
+| kind | recipe.json | you earn per successful run |
 |---|---|---|
-| `per_call` | `price_usd` | a fixed price |
-| `per_result` | `per_result_usd`, `results_from` | `per_result_usd` times the integer `results` your code returns (declare `results` as an output field); `results_from` names the `int` input whose `max` bounds one run |
-| `percent` | `percent` | that percent of the run's provider fees (the tool must call a catalog tool) |
+| steps recipe | `"pricing": {"price_usd": 0.02}` | a fixed price |
+| script | `"pricing": {"max_price_usd": 0.05}` | the sum of the `ctx.charge(usd, note)` lines in run.js, never above the cap |
 
-An optional `max_price_usd` lowers what you earn on one run; it is never required. Callers never
-see the mode: every surface shows them what recent successful runs cost, low to high, fees and your
-price together. `treg hub price <id> <usd>` sets a per-call price, so it turns a variable tool back
-to per_call; a variable price is set by publishing a new version with a `pricing` block.
+A script's lines can be a fee (`ctx.charge(0.01, "fee")`), per result (`rows.length * 0.002`), a
+margin on a catalog call (`r.cost_usd * 0.2`) or your own vendor's cost. The caller sees the cap
+before the run. Every surface shows callers what recent successful runs cost, low to high, fees and
+your price together. `treg hub price <id> <usd>` sets a recipe's price, or a script's cap, for later
+runs.
 ## Anonymous usage analytics
 
 When using treg.to, the CLI sends basic usage through PostHog: command name, success/exit code,

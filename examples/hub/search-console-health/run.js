@@ -87,6 +87,7 @@ export default async function run(ctx) {
   const health = errors ? "unhealthy" : warnings ? "needs_attention" : (perfNow.ok ? "healthy" : "unknown");
   const failed = [["sites", sites], ["performance", perfNow], ["performance_previous", perfThen], ["sitemaps", sitemaps], ["url_inspection", inspection]].filter(([, r]) => !r.ok).map(([n, r]) => `${n}: ${r.note}`);
   ctx.log(`${site}: ${health}, ${errors} error(s), ${warnings} warning(s); clicks ${before.clicks} → ${now.clicks}`);
+  ctx.charge(0.01, "fee");                               // the price: $0.01 a run
   return {
     site, permission, health, findings, performance, sitemaps: sitemapRows, page, failed,
     summary: `${site}: ${health}. ${now.clicks ?? "?"} clicks and ${now.impressions ?? "?"} impressions in the last ${DAYS} days` +

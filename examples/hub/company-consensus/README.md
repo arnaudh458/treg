@@ -21,7 +21,7 @@ One company's details from two independent sources, and whether they agree.
 
 - The provider calls at cost: about $0.007 for the two defaults, $0.009 with dropleads.
 - One judgment call: about $0.00002.
-- Plus 30% of the provider calls as the tool's fee, at most $0.05.
+- Plus 30% of the provider calls as the tool's fee (`ctx.charge(fees * 0.3, ...)`), at most $0.05.
 
 ## Why use this instead of routing
 

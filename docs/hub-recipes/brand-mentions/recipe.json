@@ -10,5 +10,5 @@
   "uses": ["scrapecreators.reddit.search.posts", "treg.x.search.posts"],
   "script": "run.js",
   "output": {"fields": ["term", "mentions", "results", "scanned", "dropped_as_noise"]},
-  "pricing": {"mode": "per_result", "per_result_usd": 0.002, "results_from": "limit"}
+  "pricing": {"max_price_usd": 0.1}
 }

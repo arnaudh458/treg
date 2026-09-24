@@ -89,6 +89,7 @@ export default async function run(ctx) {
   const cited = answered.filter(r => r.brand_cited === true).length;
   const perCompetitor = Object.fromEntries(competitors.map(c => [c, answered.filter(r => r.competitors_mentioned.includes(c)).length]));
   ctx.log(`${brand}: mentioned by ${mentioned} of ${answered.length} engines that answered`);
+  ctx.charge(0.02, "fee");                               // the price: $0.02 a run
   return {
     brand, prompt, country,
     engines: rows,

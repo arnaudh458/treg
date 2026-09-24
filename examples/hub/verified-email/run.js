@@ -37,6 +37,7 @@ export default async function run(ctx) {
     ctx.log(`found by ${foundBy}, verified by ${verifiedBy}: ${status}`);
   }
   const usable = status === "valid" || status === "risky";
+  if (usable) ctx.charge(0.01, "usable email");          // the price: $0.01 per valid or risky email
   return {
     email: String(found.email).toLowerCase(), email_status: status, found_by: foundBy, verified_by: verifiedBy,
     confidence: typeof found.confidence === "number" ? round(found.confidence) : null,

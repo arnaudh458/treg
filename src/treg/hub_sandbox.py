@@ -79,8 +79,9 @@ globalThis.ctx = {
   },
   csv: __csv,
   log: function (text) { __bridge_log(String(text)); },
-  // ctx.charge(usd, label): bill the caller for an own-key step whose cost treg cannot see (the
-  // maker's vendor). Capped per charge by pricing.max_charge_usd; the parent refuses more.
+  // ctx.charge(usd, label): the script's price, one line at a time (a fee, per result, a margin
+  // on ctx.call's cost_usd, a vendor's cost). The sum is capped by pricing.max_price_usd, the
+  // amount the caller saw before the run; the parent refuses more.
   charge: function (usd, label) { __bridge_charge(JSON.stringify([Number(usd), String(label === undefined ? "" : label)])); },
 };
 """

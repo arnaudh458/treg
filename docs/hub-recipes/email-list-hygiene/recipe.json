@@ -8,5 +8,5 @@
   "uses": [],
   "script": "run.js",
   "output": {"fields": ["checked", "to_verify", "summary", "rows"]},
-  "pricing": {"mode": "per_call", "price_usd": 0.002}
+  "pricing": {"max_price_usd": 0.002}
 }

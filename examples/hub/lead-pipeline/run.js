@@ -104,6 +104,8 @@ export default async function run(ctx) {
   const valid = people.filter(p => p.email_status === "valid").length;
   const risky = people.filter(p => p.email_status === "risky").length;
   ctx.log(`${valid} valid, ${risky} risky, of ${people.length} people; calls cost $${(spent / 1e6).toFixed(4)}`);
+  // The price: $0.01 per valid or risky email, never more than the $0.09 cap in recipe.json.
+  if (valid + risky) ctx.charge(Math.min(valid + risky, 9) * 0.01, "per usable email");
   return {
     people: people.map(columns),
     count: people.length,

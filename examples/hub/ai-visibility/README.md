@@ -27,7 +27,7 @@ decided instead). Plus the totals: `brand_mentioned_by`, `brand_cited_by`,
 
 - The four engine calls, at cost: about **1.1 cents** together.
 - Four judgment calls, at cost: about **0.01 cents** together.
-- Plus a flat **$0.02** for the tool.
+- Plus **$0.02** for the tool (`ctx.charge(0.02, "fee")`, cap `max_price_usd` $0.02).
 
 ## Limits
 

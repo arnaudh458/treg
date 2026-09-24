@@ -10,5 +10,6 @@ export default async function run(ctx) {
     rows = rows.filter(row => Object.values(row).some(v => String(v).toLowerCase().includes(needle)));
   }
   ctx.log(rows.length + " of " + (ctx.data || []).length + " rows matched");
+  ctx.charge(0.005, "fee");                              // the price: $0.005 a run
   return { rows: rows.slice(0, limit), count: rows.length };
 }

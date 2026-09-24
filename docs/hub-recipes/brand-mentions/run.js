@@ -66,5 +66,6 @@ export default async function run(ctx) {
   });
   kept.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
   const mentions = kept.slice(0, limit).map(m => ({ ...m, text: m.text.slice(0, 600) }));
+  ctx.charge(mentions.length * 0.002, "per mention");  // the price: $0.002 per mention returned
   return { term, mentions, results: mentions.length, scanned, dropped_as_noise: found.length - kept.length };
 }

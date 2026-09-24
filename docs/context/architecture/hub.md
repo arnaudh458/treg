@@ -82,10 +82,10 @@ to the owner's team first.
 optionally `data.csv`. `treg hub init <name> [--script]` writes a vendor-neutral skeleton.
 `docs/hub-recipes/` holds three worked recipes, each with a matrix test: a public sheet served as a
 tool, an uploaded CSV, and `engineering-team-size`, a script ladder over three catalog tools
-(free identity resolution, CrustData's role headcount, PDL's R&D class) priced `per_call`.
+(free identity resolution, CrustData's role headcount, PDL's R&D class) with a $0.15 `ctx.charge` fee.
 Four more, one per road, chosen from what customers call most and ask for, are live-verified but
-carry no matrix test yet: `seo-domain-snapshot` (JSON steps, `percent`), `brand-mentions` (a script
-over Reddit and routed X search that drops loose matches, `per_result`), `email-list-hygiene`
+carry no matrix test yet: `seo-domain-snapshot` (JSON steps, a fixed price), `brand-mentions` (a script
+over Reddit and routed X search that drops loose matches, charged per mention), `email-list-hygiene`
 (a script over an uploaded domain list, no tool call) and `hn-mentions` (a script over a no-key own
 tool). A JSON step's `input` is an object, so DataForSEO's array-bodied live endpoints need a script.
 
@@ -99,20 +99,18 @@ or a `default`; an `int` input names a `max`. `uses` is the security boundary: e
 catalog id or one of the maker's own tool names; a hub id is refused (depth one); a script that
 serves only its data may leave it empty. Every step's `call` must be in `uses` (`<tool>/<path>`
 for an own tool, optional `method`, `allow_fail`). Limits: `steps` ≤ 20, `wall_s` ≤ 120,
-the money fields 0–100 dollars with at most six decimals. **Pricing** (`docs/hub-pricing-decisions.md`,
-2026-09-14, renamed 2026-09-18): a `pricing` block with one `mode` per version, in the maker's words,
-and only the maker's part (the provider fees, the catalog steps, are billed to the caller on top).
-`per_call` (`price_usd`, a fixed price per successful run; a file with only a top-level `price_usd`
-still means per_call, both together is refused); `per_result` (`per_result_usd` times the integer
-`results` the run returns, so `results` (or the older `units`) must be a declared output field;
-`results_from` names the `int` input whose `max` bounds one run); `percent` (`percent` of the run's
-provider fees, so `uses` must name at least one catalog id). `max_price_usd` is optional on the two
-variable modes, a lower cap on the maker's part, never required: the hold comes from what bounds
-the run (below). The 2026-09-14 names `flat`, `per_unit`, `cost_plus`, `per_unit_usd` and
-`markup_percent` are accepted and stored canonically (`canon_pricing`). Only the mode's fields are
-read. The validator normalizes the block to micro-integers (`Validated.pricing`;
-`pricing_micro(manifest)` and `price_label(manifest)` read a stored one; `range_label` and
-`seller_part_micro` build the headline range below). References must parse and the graph is built at
+the money fields 0–100 dollars with at most six decimals. **Pricing** (`docs/hub-pricing-decisions.md` round 4,
+2026-09-24): one rule per kind, and only the maker's part (the provider fees, the catalog steps,
+are billed to the caller on top). A steps recipe has one fixed price per successful run,
+`"pricing": {"price_usd": N}` (a file with only a top-level `price_usd` means the same; both
+together is refused unless they are a stored manifest's same number). A script declares
+`"pricing": {"max_price_usd": N}` and prices itself in run.js with `ctx.charge` (below); a script
+with no `pricing` is free and ctx.charge is refused; a `price_usd` on a script is refused. Stored as
+`{"mode": "per_call", "price_usd"}` or `{"mode": "charge", "max_price_usd"}` (`stored_pricing`).
+The validator returns the runner's micro view (`Validated.pricing`: `mode`, `price_micro`,
+`max_charge_micro`); `pricing_micro(manifest)` and `price_label(manifest)` ("$0.01 a run", "up to
+$0.05 a run", "free") read a stored one; `range_label` and `seller_part_micro` build the headline
+range below. References must parse and the graph is built at
 publish, so a cycle or an unknown step is refused before anyone pays. `validate_check` pins
 `check.json` to the manifest; `validate_data` checks `data.csv` (≤ 5 MB, a header and one row; the rows travel into the engine on every run).
 
@@ -173,7 +171,7 @@ server extra) has no network, no file system, no `require`, no `process`, no tim
 heap is capped at 64 MB. The whole surface a script gets: `ctx.inputs`, `ctx.call(target,
 {method, query, body, headers})` → `{status, headers, json, text, truncated, cost_usd}` (the x-treg-*
 headers are removed; `cost_usd` is what that call charged, so a script can keep its own budget and
-stop before the ceiling: a run that passes it is stopped by treg and returns nothing), `ctx.charge(usd, label)` → nothing (bills the caller for an own-key step, below), `ctx.csv(text)` → rows
+stop before the ceiling: a run that passes it is stopped by treg and returns nothing), `ctx.charge(usd, label)` → nothing (the script's price, one line at a time, below), `ctx.csv(text)` → rows
 keyed by the header (RFC 4180), `ctx.data` → the rows of `data.csv` (≤ 5 MB, parsed once per run in the
 parent), `ctx.log(text)` (50 lines × 2 KB). `ctx.call` crosses to the parent as one JSON line
 over stdin/stdout; the parent enforces `uses` per call (a call outside the list is refused and
@@ -198,19 +196,20 @@ visibility tool: five answer engines at 30-47 s each could not fit 120 s one aft
 engine that never answers must not cost the other four. **A security
 review of the sandbox is scheduled as its own pass before release** (the owner's note).
 
-## ctx.charge: an own-key step's cost, billed to the caller
+## ctx.charge: a script's price
 
-An own-key step costs the caller nothing (rule 1) and the MAKER real money at a vendor treg cannot
-see; a waterfall over four such vendors costs the maker $0.001 one run and $0.50 the next, and no
-manifest table can say which branch ran. So the script says it: `ctx.charge(usd, label)` after the
-step, once it has seen the answer (a vendor that bills only on a hit is charged only on a hit). The
-manifest declares `pricing.max_charge_usd`, the most all charges may total in ONE run, allowed with
-every mode and only on a script tool; without it `ctx.charge` is refused and the run stops. The
-runner holds that cap with the fee on the same `{run}:price` hold, the parent refuses a charge that
-would pass it (and a 21st charge), each charge is a `charged` line in the trace with the maker's
-label, `usage.charged_micro` is their sum, and the price settled to the maker is fee + charges. A run
-that fails releases them with the fee. The price label reads "... + own-key steps up to $X per run"
-so the caller sees the cap before running (owner + Jason, 2026-09-24).
+A script prices itself: `ctx.charge(usd, note)` bills the caller one line, as many lines as the
+maker needs. A fee (`ctx.charge(0.01, "fee")`), per result (`rows.length * 0.002`), a margin on a
+catalog call (`r.cost_usd * 0.2`), and the cost of an own-key step at a vendor treg cannot see (an
+own-key step costs the caller nothing, rule 1, and the maker real money; a waterfall over such
+vendors costs $0.001 one run and $0.50 the next, and only the script knows which branch ran, so it
+charges after it has seen the answer). The manifest declares `pricing.max_price_usd`, the most all
+lines may total in ONE run; the caller sees it before running (the price label reads "up to $X a
+run"). The runner holds that cap on the `{run}:price` hold; the parent refuses a line that would
+pass it (and a 21st line) and the run stops; each line is a `charged` entry in the trace with the
+maker's note; `usage.charged_micro` is their sum and the price settled to the maker, the rest of the
+hold refunded. A run that fails releases the whole hold. Decided with Jason, 2026-09-24: one
+mechanism instead of three pricing modes.
 
 ## The maker's road (`routers/hub.py`, `application/hub/__init__.py`)
 
@@ -260,15 +259,9 @@ check never retires a tool by itself.
 
 A maker's price rides the same primitives as a step: one extra hold `{run}:price` on the caller
 at run start (402 `hub_price_unaffordable` with the amount before any step), settled on success,
-released on any failure or stop. **What is held** (`_worst_case`): the most the maker can earn on
-THIS run, derived, never declared: per_call, the price; percent, that percent of the largest provider
-fee that fits under the caller's ceiling (fees + part ≤ ceiling, so part ≤ p/(1+p) of it);
-per_result, the per-result price times the caller's `results_from` input (already clamped to its
-`max`), else the declared cap. A `max_price_usd` lowers any of these. **What is settled:**
-`_final_price(pricing, output, spent, held)` after a successful run: per_call, the price;
-per_result, `results × per_result_usd`; percent, that percent of the run's provider fees (`spent`);
-never above the hold nor a declared cap. A per_result run whose `results` is missing or not an
-integer of 0 or more fails 424 `hub_units_invalid` (so the publish check rejects such a tool). The settle is the one cross-team money movement in treg:
+released on any failure or stop. **What is held:** the most the maker can earn on THIS run: a
+recipe's `price_usd`, or a script's `max_price_usd`. **What is settled:** a recipe's price in full;
+a script's sum of ctx.charge lines (`actual_micro`), the rest of the hold refunded. The settle is the one cross-team money movement in treg:
 `settle_to_in_transaction(db, call_id, payee_org_id, actual_micro=)` consumes the settled amount
 from the caller's hold, refunds the rest of the hold to the caller, and in the same transaction
 credits the maker's team with an `earned` block of the settled amount (a `settle` entry on the
@@ -279,8 +272,8 @@ runs, the check). `earned` spends after the free kinds and before purchased mone
 (`_KIND_ORDER`). Withdrawal is backlog. The earnings view is sales only (the maker's own runs
 excluded), counts and amounts, never who called; `avg_price_micro` (earned ÷ successful runs, per
 day and overall; `avg_price_usd` in the CSV) is how a maker sees where a variable price lands.
-`treg hub price` sets one per-call number and normalizes the tool to `per_call`; a variable price is
-set by publishing a version with a `pricing` block.
+`treg hub price` sets a recipe's `price_usd` or a script's `max_price_usd` for later runs, no version
+bump; a script's amounts change only with a new version of run.js.
 
 ## The surfaces
 
@@ -314,7 +307,7 @@ set by publishing a version with a `pricing` block.
   `/hub/tools/mine` answers for the active team, and is probed again on a team switch. Files are
   read-only in the dashboard: a new version comes from the terminal or the agent. The frozen
   legacy dashboard carries the same view until its retirement.
-- **The CLI:** `treg hub init` scaffolds a `pricing` block (`per_call`, 0); `treg hub ls` shows the price
+- **The CLI:** `treg hub init` scaffolds a `pricing` block (`price_usd` 0 for a recipe; `max_price_usd` 0.05 and one `ctx.charge` line for a script); `treg hub ls` shows the price
   label; `treg hub earnings` prints the average price per successful run; `treg hub list | unlist`
   and `treg hub log --public on|off` flip the two distribution switches (`HubTool.listed`,
   `HubTool.public_log`, migration 0046), which the dashboard's Listing tab also carries.

@@ -10,5 +10,5 @@
   "uses": [],
   "script": "run.js",
   "output": {"fields": ["rows", "count"]},
-  "price_usd": 0.005
+  "pricing": {"max_price_usd": 0.005}
 }

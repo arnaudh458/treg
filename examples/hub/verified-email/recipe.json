@@ -12,5 +12,5 @@
   "script": "run.js",
   "output": { "fields": ["email", "email_status", "found_by", "verified_by", "confidence", "first_name", "last_name", "spent_usd", "units"] },
   "limits": { "cost_usd": 0.5 },
-  "pricing": { "mode": "per_unit", "per_unit_usd": 0.01, "max_price_usd": 0.01 }
+  "pricing": { "max_price_usd": 0.01 }
 }

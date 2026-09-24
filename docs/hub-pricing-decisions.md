@@ -120,5 +120,23 @@ The old names validate and are stored canonically, so no published tool changes.
 would make a hub tool look like a product rather than a markup, and it changes the money flow (the
 maker needs balance to serve calls). Named for the backlog.
 
+## Round 4 — one rule per kind (2026-09-24, owner + Jason)
+
+Jason's review of the maker page asked why a script needs three pricing modes when it can say the
+price itself. Decided:
+
+**1. A script prices itself with `ctx.charge`, under one declared cap.** `"pricing":
+{"max_price_usd": N}` and `ctx.charge(usd, note)` lines in run.js: a fee, per result, a margin on a
+call's `cost_usd`, a vendor's cost. The cap is what the caller sees before the run and what the
+runner holds; the run settles at the sum of the lines. The cap stays because a caller cannot read
+code: without it the price is known only after the run.
+
+**2. A steps recipe keeps one fixed price** (`"pricing": {"price_usd": N}`): it has no code to call
+`ctx.charge`. A variable price means a script.
+
+**3. `per_result`, `percent` and `max_charge_usd` are removed**, with the old aliases. The hub is
+off in production, so no published tool needed them; the example tools and the worked recipes were
+rewritten to `ctx.charge`. `results_from` and the `results` output field no longer bill anything.
+
 ## The backlog, in the order it was named
 (none named in this session)

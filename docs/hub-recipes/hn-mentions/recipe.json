@@ -12,5 +12,5 @@
   "uses": ["hn"],
   "script": "run.js",
   "output": {"fields": ["query", "hits", "count", "total_matches"]},
-  "pricing": {"mode": "per_call", "price_usd": 0.002}
+  "pricing": {"max_price_usd": 0.002}
 }

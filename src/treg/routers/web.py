@@ -2266,20 +2266,17 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
     example = {k: v.get("example", v.get("default")) for k, v in inputs.items() if "example" in v or "default" in v}
     example = {k: v for k, v in example.items() if v not in ("", None, 0)}
     example_json = json.dumps(example)
-    from ..domain.hub import canon_pricing, price_label as hub_price_label
-    pricing = canon_pricing(m.get("pricing") or {"mode": "per_call", "price_usd": row.price_micro / 1_000_000})
+    from ..domain.hub import price_label as hub_price_label, stored_pricing
+    pricing = stored_pricing({"price_usd": row.price_micro / 1_000_000, **m})
     raw_rng = (await hub_app.price_ranges(db, {row.tool_id: m})).get(row.tool_id)
     price_usd = hub_app.worst_usd(m, row.price_micro, raw_rng) or 0.0             # the most a run has cost, for the Offer
     label = hub_price_label(m)
     fees = any("." in u for u in m.get("uses", []))
-    if pricing.get("mode") == "per_result":
+    if pricing["mode"] == "charge":
         price_line = f"seller {label}" + (" + provider fees" if fees else "")
-        per_k = f"${float(pricing['per_result_usd']) * 1000:,.2f} per 1,000 results"
-    elif pricing.get("mode") == "percent":
-        price_line = f"seller {label}"
-        per_k = "no fixed price: the seller's part follows the provider fees"
+        per_k = "the script sets each run's price, never above the cap"
     else:
-        p_usd = float(pricing.get("price_usd", row.price_micro / 1_000_000) or 0)
+        p_usd = pricing["price_usd"]
         price_line = (f"seller ${p_usd:.6g} + provider fees" if p_usd else "free + provider fees") if fees else (f"seller ${p_usd:.6g}" if p_usd else "free")
         per_k = f"${p_usd * 1000:,.2f} per 1,000 runs" if p_usd else "no seller price"
     rng = hub_app.with_range(m, raw_rng)

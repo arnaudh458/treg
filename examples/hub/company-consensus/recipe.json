@@ -38,9 +38,5 @@
   "limits": {
     "cost_usd": 0.2
   },
-  "pricing": {
-    "mode": "cost_plus",
-    "markup_percent": 30,
-    "max_price_usd": 0.05
-  }
+  "pricing": { "max_price_usd": 0.05 }
 }

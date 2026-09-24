@@ -26,5 +26,5 @@
     "referring_domains": "$links.output.referring_domains",
     "backlinks_source": "$links._treg.served_by"
   },
-  "pricing": {"mode": "percent", "percent": 20}
+  "pricing": {"price_usd": 0.01}
 }

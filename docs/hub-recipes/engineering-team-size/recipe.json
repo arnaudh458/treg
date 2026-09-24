@@ -36,8 +36,5 @@
       "provider_attempts"
     ]
   },
-  "pricing": {
-    "mode": "per_call",
-    "price_usd": 0.15
-  }
+  "pricing": {"max_price_usd": 0.15}
 }

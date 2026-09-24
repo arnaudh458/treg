@@ -854,14 +854,17 @@ async def _feedback_impl(
 
 HUB_CREATE_DESCRIPTION = (
     "Publish a hub tool: a tool made of other tools, in your team's name. Send the four files as "
-    "fields: `manifest` (recipe.json: name, summary, inputs, uses, price_usd, and either steps or "
+    "fields: `manifest` (recipe.json: name, summary, inputs, uses, pricing, and either steps or "
     "\"script\": \"run.js\"), `script` (run.js, script recipes only), `check` (check.json: sample "
     "inputs + the output fields the check must find), `readme` (markdown). treg validates them, runs "
     "check.json ONCE for real on your balance, and the version goes live on pass. On a 422 the answer "
     "names the exact field and rule to fix. Before you write the manifest: every tool in `uses` must "
     "exist - a catalog id (catalog_search) or one of your team's own tools; a credential the team does "
     "not hold yet is NEVER hard-coded into a script - register it first (treg secret add / tool add), "
-    "then name the tool. Callers run the result with call(tool_id, params)."
+    "then name the tool. `pricing`: a steps recipe declares {\"price_usd\": N}, a fixed price per "
+    "successful run; a script declares {\"max_price_usd\": N} and sets its price in run.js with "
+    "ctx.charge(usd, note) (a fee, per result, a margin on ctx.call's cost_usd), never above N. "
+    "Callers run the result with call(tool_id, params)."
 )
 HUB_UPDATE_DESCRIPTION = (
     "Publish a NEW VERSION of a hub tool your team owns: the same four files as hub_create. The "

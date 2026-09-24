@@ -32,5 +32,6 @@ export default async function run(ctx) {
     rows.push({ email, verdict, reason });
   }
   const to_verify = rows.filter(r => r.verdict === "ok" || (allow_personal && r.verdict === "personal")).map(r => r.email);
+  ctx.charge(0.002, "fee");                              // the price: $0.002 a run
   return { checked: rows.length, to_verify, summary, rows };
 }
