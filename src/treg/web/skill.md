@@ -59,6 +59,33 @@ actually cost rather than estimating.
 A `call` on a catalog endpoint spends the team's balance. A `call` on one of the team's own tools
 spends nothing: that key belongs to them.
 
+## Scripting and batch usage — `--json` and spend caps
+
+When parsing CLI output programmatically (scripts, agents that process stdout), use `--json` mode:
+
+```bash
+treg --json call tikhub.tiktok.user.profile --query uniqueId=tiktok
+# stdout is ONE clean JSON document: {"result": <provider response>, "_treg": {metadata}}
+```
+
+The `_treg` object contains: `call_id`, `cost_micro`, `cost_usd`, `http_status`, and flags like
+`replayed`, `async`, `cache_hit`. Human-oriented lines (charges, hints) go to stderr or are
+suppressed. Set `TREG_JSON=1` for the same effect, or combine with `--quiet`/`TREG_QUIET=1` to
+silence stderr entirely.
+
+**Spend caps for batch jobs:** set a ceiling so a runaway loop cannot drain the balance:
+
+```bash
+treg --max-spend 5 call ...     # refuse calls once cumulative spend reaches $5
+TREG_MAX_SPEND=5 treg call ...  # same, via env var
+```
+
+The cap is checked before each call. Once cumulative spend reaches the ceiling, subsequent calls
+exit 1 with a `spend_cap_reached` error (JSON in `--json` mode). Per-call ceilings still work:
+send `X-Treg-Route-Max-Cost: <usd>` to refuse a single call whose *estimate* exceeds that amount
+(nothing charged on refusal). The two are independent: `--max-spend` caps the session, the header
+caps one call.
+
 ## Task — the catalog: what treg can do for you (start here)
 
 {ENDPOINTS} catalogued endpoints across {PROVIDERS} providers, grouped by what they DO: keyword & rank tracking,

@@ -56,7 +56,17 @@ CONFIG_PATH = Path(os.environ["TREG_CONFIG"]).expanduser() if os.environ.get("TR
 _ORG_OVERRIDE: str | None = None
 # Global `--json` (stripped in main): human-table commands emit the raw JSON instead — one stable
 # contract for agents/scripts. Commands that already print JSON are unaffected.
+# For `call`, --json emits ONE clean JSON document to stdout with result + metadata (cost, call_id).
+# Also controllable via TREG_JSON=1 env var.
 _JSON_OVERRIDE: bool = False
+# Global `--quiet` (stripped in main): suppress human-oriented stderr lines (progress, hints).
+# Also controllable via TREG_QUIET=1 env var.
+_QUIET_OVERRIDE: bool = False
+# Spend cap: --max-spend <usd> or TREG_MAX_SPEND (in USD). When set, the CLI refuses calls that
+# would push cumulative spend over this ceiling. None = no cap.
+_MAX_SPEND_MICRO: int | None = None
+# Cumulative spend tracker for the current CLI session (micro-USD).
+_CUMULATIVE_SPEND_MICRO: int = 0
 
 
 # ---- config (identity-first: one bearer token + an active org slug) -----------------------
@@ -344,14 +354,22 @@ def _show_charge_line(resp: httpx.Response) -> None:
     exception: their cost header is a hold pending terminal settlement, so say `reserved` rather
     than falsely claiming the ceiling was charged. `X-Treg-Call-Id` is the record to quote; neither
     field is in the provider body, which is all stdout carries. Silent for an unmetered call (no
-    header) — a team's own key is never billed — and for every non-call response."""
+    header) — a team's own key is never billed — and for every non-call response.
+
+    Also tracks cumulative spend for --max-spend enforcement."""
+    global _CUMULATIVE_SPEND_MICRO
     headers = getattr(resp, "headers", {}) or {}
     cost = headers.get("X-Treg-Cost-Micro")
     if cost is None:
         return
+    cost_micro = int(cost)
+    if not headers.get("X-Treg-Idempotent-Replay"):
+        _CUMULATIVE_SPEND_MICRO += cost_micro
     asynchronous = bool(headers.get("X-Treg-Async"))
-    line = (f"treg: reserved up to ${int(cost) / 1_000_000:g} for async settlement"
-            if asynchronous else f"treg: charged ${int(cost) / 1_000_000:g}")
+    if _JSON_OVERRIDE or _QUIET_OVERRIDE:
+        return
+    line = (f"treg: reserved up to ${cost_micro / 1_000_000:g} for async settlement"
+            if asynchronous else f"treg: charged ${cost_micro / 1_000_000:g}")
     if headers.get("X-Treg-Idempotent-Replay"):
         line += (" by the original call (this is a replay — nothing new reserved)"
                  if asynchronous else " by the original call (this is a replay — nothing new charged)")
@@ -363,7 +381,9 @@ def _show_charge_line(resp: httpx.Response) -> None:
 def _show_hint_line(resp: httpx.Response) -> None:
     """The server's optional invitation (`X-Treg-Hint: review|feedback`), one stderr line beside the
     charge line. `X-Treg-Review: requested` is the older review-only header a pre-0.19 registry
-    still sends. stdout stays the exact body."""
+    still sends. stdout stays the exact body. Suppressed in --json or --quiet mode."""
+    if _JSON_OVERRIDE or _QUIET_OVERRIDE:
+        return
     headers = getattr(resp, "headers", {}) or {}
     call_id = headers.get("X-Treg-Call-Id")
     kind = headers.get("X-Treg-Hint")
@@ -2487,8 +2507,65 @@ def _print_raw_response(response: httpx.Response) -> None:
     sys.stdout.flush()
 
 
+def _extract_call_metadata(response: httpx.Response) -> dict:
+    """Extract treg call metadata from response headers for --json output."""
+    headers = getattr(response, "headers", {}) or {}
+    meta = {}
+    if call_id := headers.get("X-Treg-Call-Id"):
+        meta["call_id"] = call_id
+    if cost := headers.get("X-Treg-Cost-Micro"):
+        cost_micro = int(cost)
+        meta["cost_micro"] = cost_micro
+        meta["cost_usd"] = cost_micro / 1_000_000
+    if headers.get("X-Treg-Idempotent-Replay"):
+        meta["replayed"] = True
+    if headers.get("X-Treg-Async"):
+        meta["async"] = True
+    if headers.get("X-Treg-Cache") == "hit":
+        meta["cache_hit"] = True
+        if fetched_at := headers.get("X-Treg-Fetched-At"):
+            meta["fetched_at"] = fetched_at
+        if age := headers.get("X-Treg-Age"):
+            meta["age_seconds"] = int(age)
+    if served_via := headers.get("X-Treg-Served-Via"):
+        meta["served_via"] = served_via
+    if served_by := headers.get("X-Treg-Served-By"):
+        meta["served_by"] = served_by
+    if treg_error := headers.get("X-Treg-Error"):
+        meta["treg_error"] = True
+    return meta
+
+
 def _show_call_response(response: httpx.Response) -> None:
-    content_type = getattr(response, "headers", {}).get("content-type", "").partition(";")[0].strip().lower()
+    """Display a call response. In --json mode, emits ONE clean JSON document with result + metadata."""
+    headers = getattr(response, "headers", {}) or {}
+    content_type = headers.get("content-type", "").partition(";")[0].strip().lower()
+
+    if _JSON_OVERRIDE:
+        meta = _extract_call_metadata(response)
+        meta["http_status"] = response.status_code
+        _show_charge_line(response)  # still tracks spend even though it doesn't print
+        _show_hint_line(response)
+
+        is_json = content_type in ("application/json", "") or content_type.endswith("+json")
+        if is_json:
+            try:
+                result = response.json()
+            except Exception:
+                result = response.text
+        else:
+            if content_type.startswith("text/"):
+                result = response.text
+            else:
+                import base64
+                result = {"_binary": True, "_base64": base64.b64encode(response.content).decode()}
+
+        output = {"result": result, "_treg": meta}
+        print(json.dumps(output, indent=2))
+        if response.status_code >= 400:
+            raise SystemExit(1)
+        return
+
     if content_type and content_type != "application/json" and not content_type.endswith("+json") \
             and not content_type.startswith("text/"):
         sys.stdout.buffer.write(response.content)
@@ -2502,7 +2579,33 @@ def _show_call_response(response: httpx.Response) -> None:
     _show(response)
 
 
+def _check_spend_cap() -> None:
+    """Check if cumulative spend would exceed --max-spend cap. Exits if cap is reached.
+
+    Called before making a call. The cap is an advisory ceiling — the call is refused BEFORE it
+    happens, not after, so we check the CURRENT cumulative spend and refuse if it's already at or
+    over the cap. Actual per-call cost isn't known in advance, so this is a pre-call check.
+    """
+    if _MAX_SPEND_MICRO is None:
+        return
+    if _CUMULATIVE_SPEND_MICRO >= _MAX_SPEND_MICRO:
+        spent_usd = _CUMULATIVE_SPEND_MICRO / 1_000_000
+        cap_usd = _MAX_SPEND_MICRO / 1_000_000
+        msg = f"treg: spend cap reached — spent ${spent_usd:g} of ${cap_usd:g} limit"
+        if _JSON_OVERRIDE:
+            print(json.dumps({
+                "error": "spend_cap_reached",
+                "spent_usd": spent_usd,
+                "cap_usd": cap_usd,
+                "message": msg,
+            }))
+        else:
+            print(msg, file=sys.stderr)
+        raise SystemExit(1)
+
+
 def cmd_call(args, cfg) -> None:
+    _check_spend_cap()
     for kv in args.query:  # a token without '=' would crash dict()/split with an opaque traceback
         if "=" not in kv:
             sys.exit(f"--query expects K=V, got: {kv!r}")
@@ -5652,10 +5755,50 @@ def _ex(*lines: str) -> str:
 
 
 def _pop_json_flag(argv: list[str]) -> bool:
+    """Check for --json flag or TREG_JSON=1 env var. Used for machine-readable output."""
     if "--json" in argv:
         argv.remove("--json")
         return True
-    return False
+    return os.environ.get("TREG_JSON", "").strip() in ("1", "true", "yes")
+
+
+def _pop_quiet_flag(argv: list[str]) -> bool:
+    """Check for --quiet/-q flag or TREG_QUIET=1 env var. Suppresses human-oriented stderr."""
+    if "--quiet" in argv:
+        argv.remove("--quiet")
+        return True
+    if "-q" in argv:
+        argv.remove("-q")
+        return True
+    return os.environ.get("TREG_QUIET", "").strip() in ("1", "true", "yes")
+
+
+def _pop_max_spend_flag(argv: list[str]) -> int | None:
+    """Check for --max-spend <usd> flag or TREG_MAX_SPEND env var. Returns micro-USD or None."""
+    for i, a in enumerate(argv):
+        if a == "--max-spend":
+            if i + 1 >= len(argv):
+                raise SystemExit("--max-spend requires a value (USD amount, e.g. --max-spend 5)")
+            argv.pop(i)
+            val = argv.pop(i)
+            try:
+                return int(float(val) * 1_000_000)
+            except ValueError:
+                raise SystemExit(f"--max-spend value must be a number, got: {val!r}")
+        if a.startswith("--max-spend="):
+            argv.pop(i)
+            val = a.split("=", 1)[1]
+            try:
+                return int(float(val) * 1_000_000)
+            except ValueError:
+                raise SystemExit(f"--max-spend value must be a number, got: {val!r}")
+    env_val = os.environ.get("TREG_MAX_SPEND", "").strip()
+    if env_val:
+        try:
+            return int(float(env_val) * 1_000_000)
+        except ValueError:
+            raise SystemExit(f"TREG_MAX_SPEND must be a number (USD), got: {env_val!r}")
+    return None
 
 
 def _pop_org_flag(argv: list[str]) -> str | None:
@@ -5685,7 +5828,14 @@ def build_parser() -> argparse.ArgumentParser:
             "treg balance                                            # what you have, what you spent",
             "treg claude                                             # run any command with the team's keys",
             "treg upload                                             # register your own .env + skills",
-        ) + "\n\n`treg <command> -h` for details.")
+        ) + "\n\n`treg <command> -h` for details.\n\n"
+            "Global flags (apply before any command):\n"
+            "  --json           Machine-readable JSON output (also TREG_JSON=1).\n"
+            "                   For `call`: stdout is ONE JSON doc with result + metadata.\n"
+            "  --quiet, -q      Suppress human-oriented stderr (also TREG_QUIET=1).\n"
+            "  --max-spend USD  Spend cap for this CLI session (also TREG_MAX_SPEND).\n"
+            "                   Refuses calls once cumulative spend reaches the cap.\n"
+            "  --org SLUG       Override the active org for this invocation (also TREG_ORG).")
     p.add_argument("--version", action="version", version=f"treg {cli_version()}", help="print the treg version and exit")
     # parser_class: without it argparse clones OUR class into every subparser, so `treg call -h`
     # would print the top-level grouped page instead of its own help.
@@ -6440,10 +6590,12 @@ def _subcommands(parser) -> set[str]:
 
 
 def main(argv: list[str] | None = None) -> None:
-    global _ORG_OVERRIDE, _JSON_OVERRIDE
+    global _ORG_OVERRIDE, _JSON_OVERRIDE, _QUIET_OVERRIDE, _MAX_SPEND_MICRO
     argv = list(sys.argv[1:] if argv is None else argv)
     override = _pop_org_flag(argv)
     _JSON_OVERRIDE = _pop_json_flag(argv)
+    _QUIET_OVERRIDE = _pop_quiet_flag(argv)
+    _MAX_SPEND_MICRO = _pop_max_spend_flag(argv)
     # Preserve the original submission shorthand; help teaches the explicit subcommands.
     if len(argv) > 1 and argv[0] == "feedback" and argv[1] in FEEDBACK_CATEGORIES:
         argv.insert(1, "submit")
