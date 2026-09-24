@@ -15,8 +15,9 @@ import shlex
 
 from httpx import AsyncClient
 
-from treg.domain.catalog import store as cs
 from treg import oauth_providers as P
+from treg.domain.catalog import store as cs
+from treg.domain.money import settlement
 
 
 def test_loaded_rows_are_plain_json(tmp_path):
@@ -96,6 +97,33 @@ def test_olostep_surface_is_bounded_byok_and_platform_safe():
     results_owner = rows["olostep.web.crawl.results"]["resource_ownership"]["requires"]
     assert status_owner["kind"] == "poll:olostep.web.crawl.status"
     assert results_owner["kind"] == "fetch:olostep.web.crawl.results"
+
+
+def test_scrapegraphai_surface_separates_bounded_platform_calls_from_monitors():
+    cat = cs.load(refresh=True)
+    rows = {ep["id"]: ep for ep in cat.for_provider("scrapegraphai")}
+    assert len(rows) == 15
+    assert {eid for eid, ep in rows.items() if cat.platform_eligible(ep)} == {
+        "scrapegraphai.web.scrape",
+        "scrapegraphai.web.extract",
+        "scrapegraphai.web.search",
+        "scrapegraphai.web.search.extract",
+        "scrapegraphai.web.crawl",
+        "scrapegraphai.web.crawl.status",
+        "scrapegraphai.web.crawl.pages",
+    }
+    assert all(not cat.platform_eligible(ep) for eid, ep in rows.items() if ".monitor." in eid)
+    assert cat.credit_rates["scrapegraphai"] == 0.004
+    assert cat.cost_view(rows["scrapegraphai.web.scrape"]["cost"], "scrapegraphai")["usd"] == 0.004
+    crawl = rows["scrapegraphai.web.crawl"]
+    assert crawl["async"]["status"]["progress"] == ["running", "paused"]
+    basis = settlement.derive_basis(
+        crawl["cost"], request={"body": {"maxPages": 1}}, input_schema=crawl["input"],
+        unit_micro=4_000, terminal=True, response_estimate_micro=12_000,
+    )
+    assert basis["when"] == "terminal"
+    assert basis["reserve_micro"] == 12_000
+    assert basis["amount"]["kind"] == "table"
 
 
 def test_trestleiq_surface_is_three_direct_single_record_tools():

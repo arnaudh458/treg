@@ -256,6 +256,7 @@ class Settings(BaseSettings):
     platform_key_tavily: str = ""     # Bearer; Search reports per-call usage, other tools settle returned successes
     platform_key_keenable: str = ""   # X-API-Key; $4/1,000-request package, 10 requests/s per organization
     platform_key_olostep: str = ""    # Bearer; prepaid credits, platform price $0.002/credit
+    platform_key_scrapegraphai: str = ""  # SGAI-APIKEY; credit balance and bounded v2 web tools
     platform_key_cloro: str = ""      # Bearer key (sk_live_…); Hobby metered rate $0.0004/credit; settles from X-Credits-Charged
     platform_key_minimax: str = ""    # Bearer key for MiniMax voice, image and video generation
     platform_key_fishaudio: str = ""  # Bearer key for Fish Audio speech and private voices

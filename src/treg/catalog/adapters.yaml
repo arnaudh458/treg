@@ -2675,6 +2675,13 @@ adapters:
     const: {body.fast_mode: true}
     out: {results: result.links, count: "len(result.links)"}
     miss: "coalesce(result.links, []) == []"
+  scrapegraphai.web.search:
+    accepts: [[q]]
+    in: {q: body.query}
+    in_expr: {body.numResults: limit}
+    const: {body.format: markdown, body.allowedTypes: [text/html]}
+    out: {results: results, count: "len(results)"}
+    miss: "coalesce(results, []) == []"
 
   tinyfish.web.fetch:
     accepts: [[url]]
@@ -2696,6 +2703,13 @@ adapters:
     const: {body.formats: [markdown], body.max_age: 604800}
     out: {pages: "list(result)", count: "len(list(result))"}
     miss: "result == null"
+  scrapegraphai.web.scrape:
+    accepts: [[url]]
+    in: {url: body.url}
+    test_identity: {url: "https://example.com"}
+    const: {body.formats: [{type: markdown}], body.allowedTypes: [text/html]}
+    out: {pages: "results.markdown.data", count: "len(results.markdown.data)"}
+    miss: "coalesce(results.markdown.data, []) == []"
   tavily.web.extract:
     accepts: [[url]]
     in_expr: {body.urls: "list(url)"}
