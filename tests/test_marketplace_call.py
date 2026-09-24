@@ -4473,3 +4473,72 @@ async def test_trestleiq_missing_required_input_never_reaches_upstream(
     assert (await clients.get(f"/call/{endpoint}")).status_code == 400
     await clients.post("/secrets", json={"name": "trestleiq", "value": "OWN-TRESTLEIQ"})
     assert (await clients.get(f"/call/{endpoint}")).status_code == 400
+
+
+# --- Tests for billing fixes (2026-09-24) ---
+
+def test_companyenrich_people_search_settles_on_item_count_with_minimum():
+    """CompanyEnrich bills 2 credits per person returned, with a 2-credit minimum on empty results.
+    Without body-counting, an empty response settled at the full pageSize estimate — a 5-person page
+    reserved $0.098 (10 credits at $0.0098/credit) but the vendor charged only $0.0196 (2 credits).
+    Live 2026-09-24: ~$41 of $53.50 wasted on the investigation's org (#19027)."""
+    from treg.domain.catalog import store as catalog_store
+    cat = catalog_store.load()
+    credit_rate = cat.credit_rates.get("companyenrich", 0.0098)
+    unit_micro = int(credit_rate * 2 * 1_000_000)  # 2 credits per person
+    mk = _mk("companyenrich", endpoint_id="companyenrich.people.search",
+             cost_type="per_result", unit_micro=unit_micro)
+    # Empty result: minimum 1 unit (2 credits)
+    assert call_settle._observed_cost_micro(mk, b'{"items": []}') == unit_micro
+    # One person: 1 unit (2 credits)
+    assert call_settle._observed_cost_micro(mk, b'{"items": [{"id": "1"}]}') == unit_micro
+    # Two people: 2 units (4 credits)
+    assert call_settle._observed_cost_micro(mk, b'{"items": [{"id": "1"}, {"id": "2"}]}') == 2 * unit_micro
+    # Five people: 5 units (10 credits)
+    assert call_settle._observed_cost_micro(
+        mk, b'{"items": [{"id":"1"},{"id":"2"},{"id":"3"},{"id":"4"},{"id":"5"}]}'
+    ) == 5 * unit_micro
+    # Invalid shapes settle at the estimate (None)
+    assert call_settle._observed_cost_micro(mk, b'{"totalItems": 5}') is None
+    assert call_settle._observed_cost_micro(mk, b'[]') is None
+    assert call_settle._observed_cost_micro(mk, b'not json') is None
+    # Scroll endpoint uses the same logic
+    scroll_mk = _mk("companyenrich", endpoint_id="companyenrich.people.search.scroll",
+                    cost_type="per_result", unit_micro=unit_micro)
+    assert call_settle._observed_cost_micro(scroll_mk, b'{"items": []}') == unit_micro
+    assert call_settle._observed_cost_micro(scroll_mk, b'{"items": [{"id": "1"}]}') == unit_micro
+
+
+def test_findymail_empty_list_response_settles_at_zero():
+    """Findymail returns [] for no-match, which is declared as a miss in the adapter. Before the fix,
+    per_success endpoints returning lists settled at the estimate because the generic adapter-miss
+    check only handled dict responses. Live 2026-09-24: $2.79 billed across 141 empty [] responses."""
+    mk = _mk("findymail", endpoint_id="findymail.search.employees",
+             cost_type="per_success", unit_micro=19_800)
+    # Empty list: the adapter's miss predicate ". == []" should match, settling at 0
+    assert call_settle._observed_cost_micro(mk, b'[]') == 0
+    # Non-empty list: not a miss, should settle at the estimate (None)
+    assert call_settle._observed_cost_micro(mk, b'[{"email": "a@b.com"}]') is None
+
+
+def test_prospeo_search_no_results_400_is_declared_miss():
+    """Prospeo people.search returns HTTP 400 with error_code NO_RESULTS for empty search results.
+    This should be treated as a miss (free), not a caller error. Live 2026-09-24: customers billed
+    for earlier attempts in the waterfall even though the search found nothing."""
+    from treg.domain.catalog.routing.contracts import declared_miss
+    from treg.domain.catalog import store as catalog_store
+    cat = catalog_store.load()
+    ep = cat.by_id.get("prospeo.people.search")
+    assert ep is not None, "prospeo.people.search must exist"
+    # NO_RESULTS body should be declared as a miss
+    no_results_body = {"error": True, "error_code": "NO_RESULTS", "message": "No results found"}
+    assert declared_miss(ep, 400, no_results_body) is True
+    # INVALID_DATAPOINTS is NOT a miss (real error)
+    invalid_body = {"error": True, "error_code": "INVALID_DATAPOINTS", "message": "Invalid input"}
+    assert declared_miss(ep, 400, invalid_body) is False
+    # 200 is not a miss status
+    assert declared_miss(ep, 200, no_results_body) is False
+    # Companies search also has the miss declaration
+    ep_companies = cat.by_id.get("prospeo.companies.search")
+    assert ep_companies is not None
+    assert declared_miss(ep_companies, 400, no_results_body) is True

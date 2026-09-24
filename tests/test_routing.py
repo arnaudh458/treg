@@ -2565,3 +2565,38 @@ def test_linkedin_url_lowercases_the_host_so_the_handle_derives():
     from treg.domain.catalog.routing import paths as P
     assert P.linkedin_url("LinkedIn.com/in/Patrick") == "https://linkedin.com/in/Patrick"
     assert P.linkedin_handle(P.linkedin_url("WWW.LinkedIn.com/in/Patrick")) == "Patrick"
+
+
+async def test_adapter_ignoring_supplied_identity_field_is_penalized(clients: AsyncClient, enrichment_on, monkeypatch):
+    """Live 2026-09-24: Lusha's people.search only accepts title, dropping company_domain. When a
+    caller sends {company_domain, title}, Lusha was selected and returned 60 identical off-target
+    results (ignoring the company constraint), each billed at $0.1248. The fix penalizes adapters
+    whose variant is a strict subset of the supplied variant, ranking them below adapters that use
+    all the supplied identity fields."""
+    from treg.domain.catalog.routing.plan import ignored_filters
+    from treg.domain.catalog import store as catalog_store
+
+    cat = catalog_store.load()
+    contract = cat.contracts.get("people.search")
+    adapter_lusha = cat.adapters.get("lusha.people.search")
+    adapter_ce = cat.adapters.get("companyenrich.people.search")
+    assert contract and adapter_lusha and adapter_ce
+
+    # Identity with both company_domain and title — matches contract variant {title, company_domain}
+    identity = {"company_domain": "intercom.com", "title": "CEO"}
+
+    # Lusha uses variant (title,), ignoring company_domain
+    lusha_variant = ("title",)
+    # Supplied variant from contract is {title, company_domain}
+    supplied_variant = ("company_domain", "title")
+
+    # Lusha's variant is a strict subset → company_domain is ignored
+    ignored = ignored_filters(adapter_lusha, contract, identity,
+                              adapter_variant=lusha_variant, supplied_variant=supplied_variant)
+    assert "company_domain" in ignored, "Lusha should report company_domain as ignored"
+
+    # CompanyEnrich uses variant (company_domain, title), matching the supplied variant
+    ce_variant = ("company_domain", "title")
+    ignored_ce = ignored_filters(adapter_ce, contract, identity,
+                                 adapter_variant=ce_variant, supplied_variant=supplied_variant)
+    assert "company_domain" not in ignored_ce, "CompanyEnrich should not report company_domain as ignored"
