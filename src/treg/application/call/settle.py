@@ -156,6 +156,30 @@ def _tavily_result_count(endpoint_id: str, doc: object) -> int | None:
     return None
 
 
+def _companyenrich_record_count(endpoint_id: str, doc: object) -> int | None:
+    """Count records returned by CompanyEnrich people.search and people.search.scroll.
+
+    CompanyEnrich bills 2 credits per person returned, with a 2-credit minimum when the result is
+    empty (verified live 2026-08-20). The reserve uses pageSize (the `limit` routed by the adapter),
+    and the catalog prices it per_result at 2 credits/person. Without body-counting, an empty
+    response settled at the full pageSize estimate — a 5-person page reserved $0.098 (10 credits)
+    and settled the same for a 51-byte empty `{items:[]}`, while the vendor charged only the 2-credit
+    minimum ($0.0196). This counter settles at max(rows, 1) * 2 credits, matching the vendor.
+    """
+    if endpoint_id not in (
+        "companyenrich.people.search",
+        "companyenrich.people.search.scroll",
+    ):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    items = doc.get("items")
+    if not isinstance(items, list):
+        return None
+    # 2 credits per person, minimum 1 unit charged (the 2-credit minimum on empty)
+    return max(len(items), 1)
+
+
 def _tavily_requested_result_limit(mk: MarketplaceCall) -> int:
     """The request-bound maximum frozen before relay; malformed evidence keeps the 20-page cap."""
     request = mk.request_data.get("body") if isinstance(mk.request_data, dict) else None
@@ -383,6 +407,22 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
         if isinstance(doc, list) and mk.unit_micro > 0:
             return sum(item is not None for item in doc) * mk.unit_micro
         return None
+    if provider == "companyenrich" and mk.cost_type == "per_result" and mk.unit_micro > 0:
+        count = _companyenrich_record_count(mk.endpoint_id, doc)
+        return None if count is None else count * mk.unit_micro
+    # Early adapter-miss check for non-dict responses (lists like `[]` from findymail.search.employees).
+    # The generic miss check at the end only handles dicts; a per_success endpoint returning `[]` would
+    # settle at the estimate without this branch — found live 2026-09-24: findymail billed $2.79 across
+    # 141 empty-list responses. The adapter's `miss` expression (". == []") applies to the whole body.
+    if mk.cost_type == "per_success" and isinstance(doc, list):
+        cat = catalog_store.load()
+        adapter = cat.adapters.get(mk.endpoint_id)
+        if adapter is not None and adapter.verified:
+            try:
+                if adapter.is_miss(doc):
+                    return 0
+            except Exception:  # noqa: BLE001 — a predicate that cannot decide settles at the estimate
+                pass
     if not isinstance(doc, dict):
         return 0 if provider == "contactout" else None
     reported = (ep.get("cost") or {}).get("reported_charge") if ep else None
