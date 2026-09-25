@@ -4473,3 +4473,43 @@ async def test_trestleiq_missing_required_input_never_reaches_upstream(
     assert (await clients.get(f"/call/{endpoint}")).status_code == 400
     await clients.post("/secrets", json={"name": "trestleiq", "value": "OWN-TRESTLEIQ"})
     assert (await clients.get(f"/call/{endpoint}")).status_code == 400
+
+
+@pytest.mark.parametrize(("mk_kw", "body", "units"), [
+    # CompanyEnrich: 2 credits per person returned, the 2-credit minimum on an empty page.
+    (dict(provider="companyenrich", endpoint_id="companyenrich.people.search"), b'{"items":[]}', 1),
+    (dict(provider="companyenrich", endpoint_id="companyenrich.people.search"), b'{"items":[{},{},{}]}', 3),
+    (dict(provider="companyenrich", endpoint_id="companyenrich.people.search"), b'{"totalItems":0}', None),
+    # Icypeas bulk: only FOUND rows bill.
+    (dict(provider="icypeas", endpoint_id="icypeas.profile.url.bulk"),
+     b'{"data":[{"status":"FOUND"},{"status":"NOT_FOUND"},{"status":"FOUND"}]}', 2),
+    (dict(provider="icypeas", endpoint_id="icypeas.scrape.bulk"), b'{"data":[{"status":"NOT_FOUND"}]}', 0),
+    # Serpstat: an error envelope is free, rows bill with a 1-credit minimum, unknown shapes estimate.
+    (dict(provider="serpstat"), b'{"id":"1","error":{"code":-32600,"message":"Data not found"}}', 0),
+    (dict(provider="serpstat"), b'{"id":"1","result":{"data":[{},{}],"summary_info":{}}}', 2),
+    (dict(provider="serpstat"), b'{"id":"1","result":{"data":[],"summary_info":{}}}', 1),
+    (dict(provider="serpstat"), b'{"id":"1","result":{"data":{"top":[{},{},{}]}}}', 3),
+    (dict(provider="serpstat"), b'{"id":"1","result":{"example.com":{"visible":1}}}', None),
+    # TheCompaniesAPI search: one credit per company returned; simplified=true is free.
+    (dict(provider="thecompaniesapi", endpoint_id="thecompaniesapi.companies.search"), b'{"companies":[]}', 0),
+    (dict(provider="thecompaniesapi", endpoint_id="thecompaniesapi.companies.search"), b'{"companies":[{},{}]}', 2),
+    (dict(provider="thecompaniesapi", endpoint_id="thecompaniesapi.companies.search",
+          request_data={"queryParams": {"simplified": "true"}}), b'{"companies":[{},{}]}', 0),
+    # Findymail employee search: one credit per contact in the bare list.
+    (dict(provider="findymail", endpoint_id="findymail.search.employees"), b'[]', 0),
+    (dict(provider="findymail", endpoint_id="findymail.search.employees"), b'[{"name":"A"},{"name":"B"}]', 2),
+])
+def test_per_result_search_settles_on_rows_returned_not_rows_requested(mk_kw, body, units):
+    """Each of these reserves the requested page size; the body says how many rows the vendor billed."""
+    mk = _mk(cost_type="per_result", unit_micro=10_000, **mk_kw)
+    expected = None if units is None else units * 10_000
+    assert call_settle._observed_cost_micro(mk, body) == expected
+
+
+def test_icypeas_profile_url_miss_settles_at_zero():
+    """No adapter reads these bodies, so the endpoint's `expect` rule is what makes a miss free."""
+    for endpoint in ("icypeas.people.profile.url", "icypeas.companies.profile.url"):
+        mk = _mk("icypeas", endpoint_id=endpoint, cost_type="per_success", unit_micro=3_800)
+        assert call_settle._observed_cost_micro(mk, b'{"success":true,"result":null,"status":"NOT_FOUND"}') == 0
+        assert call_settle._observed_cost_micro(
+            mk, b'{"success":true,"result":"https://www.linkedin.com/in/x","status":"FOUND"}') is None
