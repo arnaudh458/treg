@@ -157,9 +157,9 @@ def _tavily_result_count(endpoint_id: str, doc: object) -> int | None:
 
 
 def _companyenrich_record_count(endpoint_id: str, doc: object) -> int | None:
-    """People returned by CompanyEnrich's search, floored at one: the unit is 2 credits per person,
-    and an empty page still costs the 2-credit minimum (catalog note, verified live). The reserve
-    is the requested `pageSize`, so without counting an empty `{"items": []}` settled a whole page."""
+    """People returned by CompanyEnrich's search, floored at one: a person is 2 credits, and an
+    empty page still costs the 2-credit minimum (catalog note, verified live). The reserve is the
+    requested `pageSize`, so without counting an empty `{"items": []}` settled a whole page."""
     if endpoint_id not in (
         "companyenrich.people.search",
         "companyenrich.people.search.scroll",
@@ -208,6 +208,25 @@ def _serpstat_result_count(doc: object) -> int | None:
     if isinstance(data, list):
         return max(len(data), 1)
     return None
+
+
+def _rows_billed_micro(mk: MarketplaceCall, ep: dict | None, rows: int | None) -> int | None:
+    """What `rows` billed rows cost, never more than the hold. For a credit-priced row
+    `mk.unit_micro` is ONE provider credit, so it is scaled by the row's credits (`cost.value`:
+    2 per CompanyEnrich person, 10 per Icypeas reverse-email hit). Capped at the reserve because a
+    row whose catalog `unit` names an input entity (`call`, `keyword`, `domain`) reserves per thing
+    asked about, not per row returned: counting may only ever lower such a bill."""
+    if rows is None:
+        return None
+    raw = (ep or {}).get("cost") or {}
+    per_row = mk.unit_micro
+    if raw.get("currency") == "credit":
+        try:
+            per_row = int(Decimal(str(raw.get("value") or 1)) * mk.unit_micro)
+        except (InvalidOperation, ValueError):
+            return None
+    billed = rows * per_row
+    return min(billed, mk.estimate_micro) if mk.estimate_micro > 0 else billed
 
 
 def _tavily_requested_result_limit(mk: MarketplaceCall) -> int:
@@ -390,8 +409,8 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
         for `method: charged-now` only (a poll repeats its job's charge). Error bodies carry no
         `chargeInfo`, which is what keeps a 400/404 on a `per_call` profile fetch unbilled.
       - companyenrich / icypeas bulk / serpstat / thecompaniesapi search / findymail employees:
-        DERIVED by counting the rows the vendor bills for (see the helpers above); each reserves
-        the requested page size, which an empty answer never costs.
+        DERIVED by counting the rows the vendor bills for, priced at the row's credits and capped
+        at the hold (`_rows_billed_micro`): an empty answer never costs the requested page.
     Everyone else settles at the estimate. This is the same signal the catalog's `observed_cost`
     harvests, which is what lets phase 5's drift detector compare the two numbers directly."""
     provider = mk.provider
@@ -441,29 +460,27 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
             return sum(item is not None for item in doc) * mk.unit_micro
         return None
     if provider == "companyenrich" and mk.cost_type == "per_result" and mk.unit_micro > 0:
-        count = _companyenrich_record_count(mk.endpoint_id, doc)
-        return None if count is None else count * mk.unit_micro
+        return _rows_billed_micro(mk, ep, _companyenrich_record_count(mk.endpoint_id, doc))
     if provider == "icypeas" and mk.cost_type == "per_result" and mk.unit_micro > 0:
-        count = _icypeas_bulk_found_count(mk.endpoint_id, doc)
-        return None if count is None else count * mk.unit_micro
+        return _rows_billed_micro(mk, ep, _icypeas_bulk_found_count(mk.endpoint_id, doc))
     if provider == "serpstat" and mk.cost_type == "per_result" and mk.unit_micro > 0:
-        count = _serpstat_result_count(doc)
-        return None if count is None else count * mk.unit_micro
+        return _rows_billed_micro(mk, ep, _serpstat_result_count(doc))
     if provider == "thecompaniesapi":
-        # `simplified=true` returns a reduced record for zero credits on every endpoint (catalog
-        # notes); otherwise the company search bills one credit per company RETURNED, while the
-        # reserve is the requested `size`.
+        # `simplified=true` returns a reduced record for zero credits on the endpoints that declare
+        # it (catalog notes); otherwise the company search bills one credit per company RETURNED,
+        # while the reserve is the requested `size`.
         query_params = (mk.request_data.get("queryParams") or {}) if isinstance(mk.request_data, dict) else {}
-        if str(query_params.get("simplified")).lower() == "true":
+        declared = ((ep or {}).get("input") or {}).get("queryParams") or {}
+        if "simplified" in declared and str(query_params.get("simplified")).lower() == "true":
             return 0
         if mk.endpoint_id == "thecompaniesapi.companies.search" and mk.cost_type == "per_result" \
                 and mk.unit_micro > 0 and isinstance(doc, dict) and isinstance(doc.get("companies"), list):
-            return len(doc["companies"]) * mk.unit_micro
+            return _rows_billed_micro(mk, ep, len(doc["companies"]))
     if provider == "findymail" and mk.endpoint_id == "findymail.search.employees":
         # One finder credit per contact RETURNED, and the body is the bare list: an empty `[]` is a
-        # free miss, where the estimate billed the requested `count`.
+        # free miss, where the estimate billed the hold.
         if isinstance(doc, list) and mk.cost_type == "per_result" and mk.unit_micro > 0:
-            return sum(item is not None for item in doc) * mk.unit_micro
+            return _rows_billed_micro(mk, ep, sum(item is not None for item in doc))
         return None
     if not isinstance(doc, dict):
         return 0 if provider == "contactout" else None

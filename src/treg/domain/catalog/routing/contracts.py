@@ -123,6 +123,10 @@ def parse_contracts(doc: dict) -> dict[str, Contract]:
         for v in c.get("identity") or []:
             if isinstance(v, dict):
                 types.update({k: str(t) for k, t in v.items()})
+        scoping = c.get("scoping") or []
+        if not isinstance(scoping, list) or any(k not in types for k in scoping):
+            # A typo'd key would silently scope nothing, so a bad row fails the catalog load.
+            raise ValueError(f"contract {cap}: scoping must list identity keys of the contract, got {scoping!r}")
         out[cap] = Contract(
             capability=cap, summary=str(c.get("summary") or ""), identity=_variants(c.get("identity")),
             identity_types=types, derive=dict(c.get("derive") or {}),
@@ -132,7 +136,7 @@ def parse_contracts(doc: dict) -> dict[str, Contract]:
             default_max_cost_usd=(float(c["default_max_cost_usd"]) if c.get("default_max_cost_usd") is not None else None),
             advice_unverified=str(c.get("advice_unverified") or ""),
             routed=bool(c.get("routed", True)),
-            scoping=tuple(str(k) for k in (c.get("scoping") or ())))
+            scoping=tuple(str(k) for k in scoping))
     return out
 
 

@@ -212,7 +212,8 @@ class _RegistryClient(httpx.Client):
         retry.headers["x-treg-body-encoding"] = "base64"
         if "content-type" in request.headers:  # preserve JSON so the server still parses it after decode
             retry.headers["content-type"] = request.headers["content-type"]
-        print("  (edge WAF blocked the request body; retrying base64-encoded)", file=sys.stderr)
+        if not _JSON_OVERRIDE:  # `--json` promises a silent stderr
+            print("  (edge WAF blocked the request body; retrying base64-encoded)", file=sys.stderr)
         return super().send(retry, **kwargs)
 
 
