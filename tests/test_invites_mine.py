@@ -161,7 +161,7 @@ async def test_email_link_post_signs_in_once_and_lands_on_invite_org(client, sen
         mine = (await visitor.get("/invites/mine")).json()  # the cookie authenticates the session
         assert [m["org_id"] for m in mine] == [org["org_id"]]  # invite still PENDING — accepted in the app
         # Inbox-only proof, unlike the admin-visible code, qualifies a new account.
-        team = await visitor.post("/orgs", json={"name": "verified-invite-team"})
+        team = await visitor.post("/orgs", json={"name": "invite-team"})
         assert team.status_code == 200
         balance = await visitor.get(f"/orgs/{team.json()['org_id']}/balance",
                                     headers={"X-Treg-Token": team.json()["token"]})

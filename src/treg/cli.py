@@ -3992,10 +3992,10 @@ def cmd_whoami(args, cfg) -> None:
 
 def _team_line(c, cfg) -> str:
     r = c.get("/orgs")
-    if r.status_code != 200:
-        return ""
+    rows = _as_list(r) if r.status_code == 200 else None
+    rows = [o for o in (rows or []) if isinstance(o, dict) and "slug" in o]
     target = _effective_org(cfg)
-    o = next((o for o in r.json() if o["slug"] == target), None) or next((o for o in r.json() if o.get("active")), None)
+    o = next((o for o in rows if o["slug"] == target), None) or next((o for o in rows if o.get("active")), None)
     return o["slug"] if o else ""
 
 
