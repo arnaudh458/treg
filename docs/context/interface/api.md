@@ -389,7 +389,8 @@ validated before resolving the shared HTTP client. `/auth/logout` remains an HTT
     virtual-memory cap crashes Go CLIs (gh/stripe/doctl) and `RLIMIT_NPROC` is per-uid, shared with the
     server. Full **filesystem/network** isolation needs a container deploy and is a planned follow-up.
 - **Meta:** `meta` (`GET /meta`, open) → `{public_url, github, google, app_version, treg_version,
-  posthog_key/posthog_host, intercom_app_id}` for the dashboard. The last three are the opt-in
+  posthog_key/posthog_host, intercom_app_id, referral}` for the dashboard. `referral` carries the
+  two configured reward amounts so the top-bar entry can name them without `GET /referrals`. The last three are the opt-in
   third-party keys (analytics, support chat): empty on a deployment that didn't set them, so
   self-hosted pages load neither PostHog nor the Intercom Messenger. `intercom_app_id` is paired
   server-side with `intercom_secret`, which never leaves the server: `_intercom_user_hash` (HMAC-SHA256
