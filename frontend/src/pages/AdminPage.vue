@@ -42,7 +42,8 @@ export default { setup: useDashboard }
                 <td class="sub">v{{u.now&&u.now.version}} · {{u.now&&u.now.price_label}}<div style="max-width:40ch">{{u.now&&u.now.summary}}</div></td>
                 <td class="sub"><template v-if="u.new">v{{u.new.version}} · {{u.new.price_label}} · check {{u.new.check}}<div style="max-width:40ch">{{u.new.summary}}</div>
                     <div v-if="u.now && JSON.stringify(u.now.uses)!==JSON.stringify(u.new.uses)">uses: {{u.new.uses.join(', ')}}</div></template>
-                  <div v-if="u.new_price_usd!=null"><b>new price: ${{u.new_price_usd}}</b></div></td>
+                  <div v-if="u.new_price_usd!=null"><b>new price: ${{u.new_price_usd}}</b></div>
+                  <div v-if="u.fields_lost && u.fields_lost.length" class="warn"><b>no longer returns:</b> {{u.fields_lost.join(', ')}} <span class="muted">(filled in the approved version's check, empty in this one's)</span></div></td>
                 <td style="text-align:right;white-space:nowrap">
                   <input v-model="admHub.reason['u:'+u.tool_id]" placeholder="reason, to reject" style="width:160px" aria-label="Reason to reject the update"/>
                   <button class="btn sm primary" :disabled="admHub.busy===u.tool_id" @click="admHubUpdate(u,'approve')" style="margin-left:6px">Approve</button>
@@ -89,3 +90,7 @@ export default { setup: useDashboard }
           </table>
 
 </template>
+
+<style scoped>
+.warn{color:var(--amber)}
+</style>

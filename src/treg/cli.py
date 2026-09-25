@@ -79,6 +79,10 @@ def _load_config() -> dict:
 
 
 def _save_config(cfg: dict) -> None:
+    # A one-command `--org` key (see main) never reaches the file: the stored team and key stay.
+    if "_org_once" in cfg:
+        kept = cfg.pop("_org_once")
+        cfg = {**cfg, **kept}
     CONFIG_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Write-then-rename so an interrupted save (kill / full disk) can't leave a truncated,
     # unparseable config that bricks every subsequent command.
@@ -390,7 +394,15 @@ def _show_failure_diagnostics(resp: httpx.Response) -> None:
     marks treg's own refusals; its absence on a 4xx/5xx means the provider answered and treg relayed
     it unchanged. stderr only — stdout stays the exact body for whatever parses it."""
     headers = getattr(resp, "headers", {}) or {}
-    whose = "treg refused the call" if headers.get("X-Treg-Error") else "the provider answered; treg relayed it unchanged"
+    # Only a call is relayed: any other path (/orgs, /hub, ...) is treg's own answer (found in hub
+    # simulation run 2: a refused team name printed "the provider answered").
+    try:
+        path = resp.request.url.path
+    except (AttributeError, RuntimeError):
+        path = "/call/"
+    relayed = path.startswith("/call/") and not headers.get("X-Treg-Error")
+    whose = "the provider answered; treg relayed it unchanged" if relayed else (
+        "treg refused the call" if path.startswith("/call/") else "treg answered")
     line = f"treg: HTTP {resp.status_code} — {whose}"
     if call_id := headers.get("X-Treg-Call-Id"):
         line += f"; call id {call_id} (quote it to support; `treg calls` shows the record)"
@@ -6957,6 +6969,17 @@ def main(argv: list[str] | None = None) -> None:
         argv = ["with", *argv]
     args = parser.parse_args(argv)
     cfg = _load_config()
+    if (override and cfg.get("identity") and cfg.get("token") and not os.environ.get("TREG_TOKEN")
+            and override != cfg.get("active_org") and getattr(args, "fn", None) is not cmd_org_use):
+        # A Default key belongs to one team, so `--org <other>` with it was refused (403 "this key
+        # belongs to another team", hub simulation run 2). For this one command, use the other
+        # team's Default key, the same exchange `treg org use` makes, without saving it.
+        token, detail = _default_token_for_org(cfg, override)
+        if token:
+            cfg = {**cfg, "_org_once": {"token": cfg["token"], "active_org": cfg.get("active_org")},
+                   "token": token, "active_org": override}
+        else:
+            sys.exit(f"--org {override}: {detail}. Your teams: `treg org ls`.")
     if override:
         _ORG_OVERRIDE = override
     started = time.monotonic()

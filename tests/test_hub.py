@@ -1563,3 +1563,21 @@ async def test_a_publish_that_changes_the_price_says_so(clients: AsyncClient, hu
     await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.05})
     r = await _v2(clients, tool_id)                                            # recipe.json still says $0.01
     assert "$0.05 a run -> $0.01 a run" in r.json()["price_note"]
+
+
+async def test_the_update_queue_names_fields_the_new_version_stopped_returning(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 2: v4 never returned the industry and passed a check that asked only for
+    the domain. The reviewer sees the fields the approved version filled and the new one does not."""
+    script = ("export default async function run(ctx) {"
+              "  const r = await ctx.call('" + EP + "', {query: {aweme_id: 'x'}});"
+              "  return { rows: r.json.data, count: FULL ? r.json.data.length : null };"
+              "}")
+    tool_id = await _publish_script_priced(clients, monkeypatch, 0.5, script.replace("FULL", "true"), n=2)
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "approve")
+    m = _script_manifest(uses=[EP], pricing={"max_price_usd": 0.5})
+    r = await clients.put(f"/hub/tools/{tool_id}", json={"manifest": m, "script": script.replace("FULL", "false"),
+                                                         "readme": "x", "check": {"inputs": {}, "fields": ["rows"]}})
+    assert r.json()["status"] == "review", r.text
+    queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
+    assert queue[0]["fields_lost"] == ["count"]

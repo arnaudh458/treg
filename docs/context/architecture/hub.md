@@ -345,6 +345,10 @@ bump; a script's amounts change only with a new version of run.js.
   maker's own runs and checks, marked `price_from_tests` and "(from the maker's own tests)". The
   contract names the hosts of the maker's own tools a version calls (`own_hosts`,
   `sends_inputs_to`): a caller's inputs reach them, and they can change with no new version.
+- **What a reviewer sees of an update** (round 5): a maker writes its own check.json, so a check
+  can prove little. The update queue compares the output of the approved version's check run with
+  the new version's (`_fields_lost`) and names every field the approved one filled and the new one
+  leaves empty ("no longer returns: industry").
 - **The public share page** `GET /hub/<id>` (and `.md`; `@N`): the contract for a person or an
   agent on the public stylesheet; the price as the mode and the worst case ("seller $X per unit,
   up to $Y per run"; the schema.org Offer carries the worst case); the RUN LOG when the maker left

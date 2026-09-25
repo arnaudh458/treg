@@ -673,8 +673,29 @@ async def pending_updates(db: AsyncSession) -> list[dict[str, Any]]:
             new = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id,
                                                           HubTool.version == lst.pending_version))).scalars().first()
         out.append({"tool_id": lst.tool_id, "now": side(now), "new": side(new),
-                    "new_price_usd": (lst.pending_pricing or {}).get("price_usd")})
+                    "new_price_usd": (lst.pending_pricing or {}).get("price_usd"),
+                    "fields_lost": await _fields_lost(db, now, new)})
     return out
+
+
+async def _fields_lost(db: AsyncSession, now: HubTool | None, new: HubTool | None) -> list[str]:
+    """Output fields the approved version's check run filled that the new version's check run left
+    empty. A maker writes its own check.json, so a check can prove little (hub simulation run 2:
+    v4 never returned the industry and passed a check that asked only for the domain); the reviewer
+    sees what the new version stopped returning."""
+    from ...models import HubRun
+    if now is None or new is None:
+        return []
+
+    async def output_of(t: HubTool) -> dict[str, Any]:
+        rid = (t.check_result or {}).get("run_id")
+        if not rid:
+            return {}
+        o = (await db.execute(select(HubRun.output).where(HubRun.run_id == rid))).scalar_one_or_none()
+        return o if isinstance(o, dict) else {}
+    empty = (None, "", [], {})
+    before, after = await output_of(now), await output_of(new)
+    return sorted(f for f, v in before.items() if v not in empty and after.get(f) in empty)
 
 
 async def decide_update(db: AsyncSession, *, tool_id: str, approve: bool, reason: str,
