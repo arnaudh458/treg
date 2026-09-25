@@ -1225,9 +1225,10 @@ them.
 
 ## The Referrals view
 
-`ReferralsPage.vue` renders the referrals view. The maintained Dashboard exposes a fixed
-`Refer a friend` link at the bottom left, leaving the bottom right for the support messenger.
-`dashboard.css` keeps this placement on desktop and mobile.
+`ReferralsPage.vue` renders the referrals view. The maintained Dashboard's entry is a pill in the
+top bar that names the offer ("Give $5, get $5") from `/meta.referral`, falling back to
+`Refer a friend` when either amount is zero or `/meta` has not loaded. Narrow screens show only
+its gift icon.
 
 **`'referrals'` must appear in BOTH view whitelists** — `viewFromHash()` and the `popstate` handler.
 `go('referrals')` works on click regardless of them; those two lists are what make the view survive
