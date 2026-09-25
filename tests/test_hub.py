@@ -947,14 +947,16 @@ async def test_every_price_surface_leads_with_the_observed_range(clients: AsyncC
     assert range_label({"uses": ["a.b"], "pricing": {"mode": "per_call", "price_usd": 0.01}}, None, None) == "$0.01/run + provider fees"
     assert range_label({"uses": ["own"], "pricing": {"mode": "per_call", "price_usd": 0.01}}, None, None) == "$0.01/run"
     assert range_label({"uses": ["a.b"], "pricing": {"mode": "per_call", "price_usd": 0}}, None, None) == "free + provider fees"
-    assert range_label(sc, 750_000, 750_000) == "$0.75/run" and range_label(sc, 750_000, 1_225_000) == "$0.75–$1.225/run"
+    assert range_label(sc, 750_000, 750_000) == "$0.75/run so far · seller up to $0.25 a run"
+    assert range_label(sc, 750_000, 1_225_000) == "$0.75–$1.225/run so far · seller up to $0.25 a run"
+    assert range_label({"uses": ["a.b"], "pricing": {"mode": "per_call", "price_usd": 0.01}}, 11_000, 11_000) == "$0.011/run"
     assert seller_part_micro(sc, None, 150_000) == 150_000          # the maker's own run: its charge lines
     assert seller_part_micro(sc, 20_000, 150_000) == 20_000         # a caller's run: what they paid
     assert seller_part_micro({"pricing": {"mode": "per_call", "price_usd": 0.01}}, None) == 10_000
     tool_id = await _publish_script_priced(clients, monkeypatch, 0.5, PER_ITEM, n=3)
     row = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
     # the publish check was the maker's own run: 3 rows charged $0.006 on top of the $0.001 step
-    assert row["price_samples"] >= 1 and row["price_range"] == "$0.007/run"
+    assert row["price_samples"] >= 1 and row["price_range"] == "$0.007/run so far · seller up to $0.5 a run"
     page = (await clients.get(f"/hub/{tool_id}.md")).text
     assert f"**Price:** {row['price_range']}" in page
     got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]
@@ -1080,6 +1082,8 @@ async def test_a_new_version_of_a_listed_tool_waits_for_review(clients: AsyncCli
     assert run.status_code == 200 and run.json()["recipe"] == f"{tool_id}@1"
     assert (await clients.post(f"/call/{tool_id}@2", json={"domain": "x"}, headers=stranger)).status_code == 404
     assert (await clients.post(f"/call/{tool_id}@2", json={"domain": "x"})).status_code == 200   # the maker
+    assert (await clients.get(f"/catalog/endpoints/{tool_id}@2")).status_code == 404            # not public
+    assert (await clients.get(f"/hub/{tool_id}@2")).status_code == 404
     queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
     assert queue[0]["tool_id"] == tool_id and queue[0]["now"]["version"] == 1 and queue[0]["new"]["version"] == 2
     assert queue[0]["new"]["summary"].endswith("now faster.")

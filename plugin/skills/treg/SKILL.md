@@ -331,6 +331,12 @@ check.json    sample inputs + the output fields the check must find; run once fo
 README.md     what it does, for a human
 ```
 
+**recipe.json rules** (publish refuses anything else, naming the field): `summary` is 1-200
+characters, what an agent reads first. Each input takes only `type` (string, int, float, bool, list,
+object), `default`, `example`, `note` (its description), `min`, `max`, `secret`. An input with no
+`default` is required; every non-secret input needs an `example` or a `default`, and an `int` needs a
+`max`. `capability` is optional: a catalog capability id, the job your tool does.
+
 **The rule before you write a line of script: never paste a credential into it.** A key the team
 does not hold yet is registered FIRST, then named. The script only ever sees a tool's NAME:
 

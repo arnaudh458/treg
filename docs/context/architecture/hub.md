@@ -284,7 +284,8 @@ bump; a script's amounts change only with a new version of run.js.
   `--with-hub` keeps it at the final merge. `GET /catalog/endpoints/<id>` (behind `catalog_get`,
   `treg catalog get`) answers for a hub id with the public contract (`kind: "hub"`, summary,
   inputs, output, the price line (`price_range` leads: what recent successful runs cost, steps
-  and seller price together, from `application/hub.price_ranges` over 30 days of every successful
+  and seller price together, and for a script the seller cap after it ("$0.0103/run so far · seller up to
+  $0.02 a run": recent runs may all have charged little), from `application/hub.price_ranges` over 30 days of every successful
   run, checks included, with `price_samples`; before any run the declared worst case plus
   "+ steps"; then `price_label`: the mode and the worst case; `cost.usd` is the
   worst case), health, version, `call_template`, the page URL, the readme);
@@ -316,7 +317,8 @@ bump; a script's amounts change only with a new version of run.js.
 - **Updates to a listed tool** (round 4): a version that passes its check on an APPROVED tool
   becomes `review`, not `live` (`_hold_for_review`), so every surface that reads `live` keeps the
   approved version; a newer waiting version makes the older one `superseded`. `tool_for` serves a
-  pinned `review` version to the maker's team only. `treg hub price` on an approved tool is checked
+  pinned `review` (or `checking`) version only to a CALL by the maker's team; the public views
+  (catalog get, the share page), which name no caller, never show it. `treg hub price` on an approved tool is checked
   and stored as `HubListing.pending_pricing`. The queue is `GET /admin/hub/updates`
   (`pending_updates`: what serves now beside what would replace it); `POST
   /admin/hub/updates/{id} {decision, reason}` (`decide_update`) approves (the version goes live, the

@@ -82,7 +82,8 @@ export default async function run(ctx) {
       if (!affordable("treg.people.email.find")) { stop(p, "spending limit"); continue; }
       const f = await call("treg.people.email.find", who);
       const out = f.status === 200 && f.json && f.json.output;
-      if (out && out.email) { p.email = out.email; p.email_source = served(f); }
+      if (out && out.email && workEmail(out.email, domain)) { p.email = out.email; p.email_source = served(f); }
+      else if (out && out.email) ctx.log(`dropped ${out.email}: not a work email at ${domain}`);
     }
     if (p.email && emails.has(p.email)) { p.duplicate = true; continue; }   // same person, another row
     if (p.email) emails.add(p.email);
@@ -144,7 +145,7 @@ function person(r, domain) {
     company: text(pick(r, "company_name", "companyName", "lastCompanyName") || (r.company && (r.company.name || r.company)) || (r.organization && r.organization.name) || cj.company_name) || domain,
     linkedin: linkedinUrl(r),
     location: text(pick(r, "location", "country_code", "address")),
-    email: emailOf(r),
+    email: workEmail(emailOf(r), domain) ? emailOf(r) : null,
     phone: phoneOf(r),
   };
 }
@@ -155,6 +156,20 @@ function linkedinUrl(r) {
     (r.social_handles && r.social_handles.professional_network_identifier && r.social_handles.professional_network_identifier.profile_url);
   const u = text(direct || nested);
   return u && /linkedin\.com\//i.test(u) ? u.replace(/^http:\/\//i, "https://") : null;
+}
+
+// A WORK email only. Found live 2026-09-25 (hub simulation run 1): a finder returned a Gmail address
+// for a company's CMO, the checker called the mailbox valid, and the tool charged its fee. An address
+// at a free mail provider is never a work email; with a company domain given, the address must be at
+// that domain (or one of its subdomains). Anything else counts as not found, and no fee is charged.
+const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "hotmail.com", "outlook.com",
+  "live.com", "msn.com", "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "gmx.com",
+  "gmx.net", "mail.com", "yandex.com", "yandex.ru", "qq.com", "163.com", "126.com", "zoho.com", "fastmail.com"]);
+
+function workEmail(email, domain) {
+  const at = String(email || "").toLowerCase().split("@")[1] || "";
+  if (!at || FREE_MAIL.has(at)) return false;
+  return !domain || at === domain || at.endsWith("." + domain);
 }
 
 function emailOf(r) {

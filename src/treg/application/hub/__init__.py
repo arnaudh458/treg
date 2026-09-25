@@ -83,8 +83,9 @@ async def tool_for(db: AsyncSession, rest: str, *, live_only: bool = True,
         return None
     if row.status in ("checking", "review"):
         # the check run pins it (round 2 q10); a version waiting for review (round 4) is the maker's to
-        # try by @N and nobody else's; anyone else who guesses @N gets nothing (8.1 review)
-        return row if caller_org_id is None or row.org_id == caller_org_id else None
+        # try by @N and nobody else's; anyone else who guesses @N gets nothing (8.1 review). The public
+        # views (no caller) never show it: its contract is not reviewed yet (hub simulation run 1).
+        return row if caller_org_id is not None and row.org_id == caller_org_id else None
     if live_only and row.status != "live":
         return None
     newer = (await db.execute(

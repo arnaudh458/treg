@@ -216,6 +216,7 @@ tools, vendor CLIs — is free of it.
 | `treg topup` | | add funds, or set up automatic top-ups |
 
 ```bash
+treg whoami                  # the account, the active team and your role, the server
 treg balance                 # every new team starts with $1.00 of free credit
 treg balance --json          # integer micro-USD (1e-6 USD) — the unit the ledger uses
 treg topup

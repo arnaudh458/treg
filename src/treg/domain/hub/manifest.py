@@ -457,7 +457,12 @@ def range_label(manifest: dict[str, Any], low_micro: int | None, high_micro: int
             return (f"up to ${p['max_price_usd']:.6g}/run" if p["max_price_usd"] else "free") + fees
         return (f"${p['price_usd']:.6g}/run" if p["price_usd"] else "free") + fees
     lo, hi = low_micro / 1_000_000, high_micro / 1_000_000
-    return (f"${lo:.6g}/run" if low_micro else "free") if low_micro == high_micro else f"${lo:.6g}–${hi:.6g}/run"
+    span = (f"${lo:.6g}/run" if low_micro else "free") if low_micro == high_micro else f"${lo:.6g}–${hi:.6g}/run"
+    # A script's recent runs may all have charged little; the cap says what a run CAN charge (found in
+    # hub simulation run 1: search showed $0.0103 while a good result cost $0.0163).
+    if p["mode"] == "charge" and p["max_price_usd"]:
+        return f"{span} so far · seller up to ${p['max_price_usd']:.6g} a run"
+    return span
 
 
 def _bad_ref(value: Any) -> str | None:

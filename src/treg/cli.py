@@ -789,7 +789,7 @@ def _splash() -> None:
 def _brand(sub: str) -> None: print(f"\n{_A}{_B}▚ tools-registry{_R} {_M}— {sub}{_R}")
 def _ok(t: str) -> None: print(f"  {_G}✓{_R} {t}")
 def _dim(t: str) -> None: print(f"{_M}{t}{_R}")
-def _kv(k: str, v: str) -> None: print(f"  {_M}{k:<7}{_R}{v}")
+def _kv(k: str, v: str) -> None: print(f"  {_M}{k:<7}{_R} {v}" if len(k) >= 7 else f"  {_M}{k:<7}{_R}{v}")
 
 
 def _pause(yes: bool) -> None:
@@ -3956,6 +3956,37 @@ def _usd(micro) -> str:
     return f"{sign}${v:,.2f}" if v >= 1 else f"{sign}${v:.4f}"
 
 
+def cmd_whoami(args, cfg) -> None:
+    """Who this CLI acts as: the account, the active team and your role in it, and the registry.
+    Found in the hub simulation: `treg whoami` was not a command, so it ran the system `whoami`
+    through `treg with` and printed the Mac's user name, which reads like the treg account."""
+    with _client(cfg) as c:
+        me = c.get("/auth/me")
+        orgs = c.get("/orgs")
+    if me.status_code == 401:
+        sys.exit("treg: not signed in, or this token is invalid/expired.\n  Sign in:  treg login")
+    who = me.json() if me.status_code == 200 else {}
+    rows = orgs.json() if orgs.status_code == 200 else []
+    target = _effective_org(cfg)
+    active = next((o for o in rows if o["slug"] == target), None) or next((o for o in rows if o.get("active")), None)
+    if _JSON_OVERRIDE:
+        print(json.dumps({"email": who.get("email") or cfg.get("email"), "team": active and active["slug"],
+                          "role": active and active.get("role"), "registry": os.environ.get("TREG_URL") or cfg["base_url"]}, indent=2))
+        return
+    _kv("email", who.get("email") or cfg.get("email") or "-")
+    _kv("team", f"{active['slug']}  ({active.get('role')})" if active else (target or "-"))
+    _kv("server", os.environ.get("TREG_URL") or cfg["base_url"])
+
+
+def _team_line(c, cfg) -> str:
+    r = c.get("/orgs")
+    if r.status_code != 200:
+        return ""
+    target = _effective_org(cfg)
+    o = next((o for o in r.json() if o["slug"] == target), None) or next((o for o in r.json() if o.get("active")), None)
+    return o["slug"] if o else ""
+
+
 def cmd_balance(args, cfg) -> None:
     """The team's prepaid balance, what it's made of, and the recent ledger. Amounts are shown in USD;
     the API's `*_micro` integers are the real values (`--json` for those)."""
@@ -3964,11 +3995,13 @@ def cmd_balance(args, cfg) -> None:
         if org_id is None:
             sys.exit("no active org")
         r = c.get(f"/orgs/{org_id}/balance", params={"limit": args.limit})
+        team = "" if (_JSON_OVERRIDE or r.status_code >= 400) else _team_line(c, cfg)
     if _JSON_OVERRIDE or r.status_code >= 400:
         _show(r)  # exits non-zero on an error
         return
     b = r.json()
-    print(f"\n  {_A}Balance{_R}  {_G}{_usd(b['balance_micro'])}{_R}   {_M}({b['balance_micro']} micro-USD){_R}")
+    print(f"\n  {_A}Balance{_R}  {_G}{_usd(b['balance_micro'])}{_R}   {_M}({b['balance_micro']} micro-USD){_R}"
+          + (f"   {_M}team {team}{_R}" if team else ""))
     blocks = b.get("blocks") or []
     if blocks:
         print(f"\n  {_M}credit{_R}")
@@ -5303,7 +5336,14 @@ def _hub_trace(out: dict) -> None:
     _kv("steps", f"{u.get('steps')}   cost {u.get('cost_micro')} µ$ (${(u.get('cost_micro') or 0) / 1e6:.4f})   {u.get('ms')} ms")
 
 
-def _hub_report(r, *, json_out: bool) -> None:
+def _hub_example(manifest: dict) -> str:
+    """The call line's JSON body, from the tool's own inputs (their example or default)."""
+    ex = {k: v.get("example", v.get("default")) for k, v in (manifest.get("inputs") or {}).items()
+          if isinstance(v, dict) and not v.get("secret")}
+    return json.dumps({k: v for k, v in ex.items() if v not in (None, "")})
+
+
+def _hub_report(r, *, json_out: bool, example: str = "{}") -> None:
     payload = r.json() if r.headers.get("content-type", "").startswith("application/json") else {"text": r.text}
     if json_out:
         print(json.dumps(payload, indent=2))
@@ -5329,7 +5369,7 @@ def _hub_report(r, *, json_out: bool) -> None:
                         _kv("step", f"{e['name']} → {e['call']}: {str(e['error'])[:400]}")
         if live:
             _section("④ Call it")
-            _arrow(f"treg call {payload.get('tool_id')} --data '{{\"domain\": \"figma.com\"}}'")
+            _arrow(f"treg call {payload.get('tool_id')} --data '{example}'")
             _arrow(f"POST /call/{payload.get('tool_id')}   with X-Treg-Token, a JSON body of inputs")
             if payload.get("page"):
                 _arrow(f"share: {payload['page']}   (readable without sign-in; .md for agents)")
@@ -5363,6 +5403,8 @@ def cmd_hub_init(args, cfg) -> None:
             _ok(f"{folder / f}   {_M}{what}{_R}")
     _section("② Next")
     _arrow("edit recipe.json — every tool in `uses` must exist: a catalog id, or one of your team's tools")
+    _arrow("recipe.json rules: summary 1-200 characters; an input takes only type, default, example, note, "
+           "min, max, secret; an input with no default is required; an int needs a max")
     _arrow(f"treg hub run {folder} --input k=v     a real run on your own token; nothing stored")
     _arrow(f"treg hub publish {folder}              validate, run check.json once, live on pass")
 
@@ -5392,7 +5434,7 @@ def cmd_hub_publish(args, cfg) -> None:
     body = _hub_read_folder(args.dir)
     with _client(cfg) as c:
         r = c.post("/hub/tools", json=body, timeout=httpx.Timeout(240.0, connect=10.0))
-    _hub_report(r, json_out=getattr(args, "json", False))
+    _hub_report(r, json_out=getattr(args, "json", False), example=_hub_example(body.get("manifest") or {}))
 
 
 def cmd_hub_earnings(args, cfg) -> None:
@@ -5460,7 +5502,7 @@ def cmd_hub_list(args, cfg) -> None:
     lst = d.get("listing") or {"state": "none"}
     _section("Listing")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
-    _kv("listing", _LISTING_WORDS.get(lst["state"], lst["state"]))
+    _kv("search", _LISTING_WORDS.get(lst["state"], lst["state"]))
     if lst.get("reason"):
         _kv("reason", lst["reason"])
 
@@ -5491,6 +5533,9 @@ def cmd_hub_price(args, cfg) -> None:
     _section("Price changed")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
     _kv("price", f"{d.get('price_label', '')}; applies to later runs")
+    if (d.get("pricing") or {}).get("mode") == "charge":
+        _arrow("a script's fee is the ctx.charge lines in run.js: this moved only the cap. "
+               "To change what you earn, edit run.js and `treg hub publish` a new version.")
 
 
 def cmd_hub_ls(args, cfg) -> None:
@@ -5504,11 +5549,26 @@ def cmd_hub_ls(args, cfg) -> None:
     _section("Your hub tools")
     if not rows:
         _dim("  none yet — treg hub init <name>"); return
-    print(f"  {_M}{'TOOL':<44}{'VER':>3}  {'STATUS':<8}{'KIND':<7}{'PRICE':<28}USES{_R}")
+    # The version callers get is the newest live one; the price and the search state belong to it.
+    serves = {}
     for t in rows:
-        colour = _G if t["status"] == "live" else _AM if t["status"] == "failed" else _M
-        price = t.get("price_range") or t.get("price_label") or (f"${t['price_usd']:.6g}/run" if t.get("price_usd") else "free")
-        print(f"  {t['tool_id']:<44}{t['version']:>3}  {colour}{t['status']:<8}{_R}{t['kind']:<7}{price:<28}{', '.join(t['uses'])[:40]}")
+        if t["status"] == "live":
+            serves[t["tool_id"]] = max(serves.get(t["tool_id"], 0), t["version"])
+    print(f"  {_M}{'TOOL':<40}{'VER':>3}  {'STATUS':<11}{'KIND':<7}{'YOUR PRICE':<22}{'IN SEARCH':<20}USES{_R}")
+    for t in rows:
+        colour = _G if t["status"] == "live" else _AM if t["status"] in ("failed", "review", "rejected") else _M
+        is_serving = serves.get(t["tool_id"]) == t["version"]
+        price = (t.get("price_label") or "free") if is_serving else ""          # the maker's own price
+        search = ""
+        if is_serving:
+            lst = t.get("listing") or {"state": "none"}
+            search = {"none": "no", "requested": "requested", "approved": "yes", "rejected": "rejected"}.get(lst["state"], lst["state"])
+            upd = lst.get("update") or {}
+            if upd.get("state") == "pending":
+                search += " · update waits"
+        status = t["status"] + (" ◀" if is_serving else "")
+        print(f"  {t['tool_id']:<40}{t['version']:>3}  {colour}{status:<11}{_R}{t['kind']:<7}{price[:21]:<22}{search:<20}{', '.join(t['uses'])[:30]}")
+    _dim("  ◀ the version callers get. `treg hub list <id>` asks for search; treg reviews each request and update.")
 
 
 def cmd_feedback_get(args, cfg) -> None:
@@ -5538,7 +5598,8 @@ def _catalog_get_hub(e: dict) -> None:
         if v:
             print(f"  {_M}{k:<10}{_R}{v}")
     _line("maker", f"{e.get('provider')}  (a hub tool made of {e.get('made_of')} tool{'s' if e.get('made_of') != 1 else ''}; {e.get('recipe')} recipe, v{e.get('version')})")
-    _line("price", f"{e.get('price_line')}   (${(e.get('cost') or {}).get('usd', 0):.6g} per successful run to the maker; metered steps on top)")
+    _line("price", f"{e.get('price_line')}")
+    _line("a run", f"{e.get('price_range') or ''}   (what a caller paid per successful run: provider fees and the seller price together)")
     chk = e.get("check") or {}
     _line("health", f"{e.get('status')} · check {chk.get('status') or '-'} {('at ' + str(chk.get('checked_at'))[:16]) if chk.get('checked_at') else ''}")
     inputs = e.get("inputs") or {}
@@ -6688,6 +6749,9 @@ def build_parser() -> argparse.ArgumentParser:
     get.set_defaults(fn=cmd_feedback_get)
 
     # ---- balance ----
+    who = mk(sub, "whoami", "Who this CLI acts as: your account, the active team and your role, the server.",
+             "treg whoami", "treg whoami --json")
+    who.set_defaults(fn=cmd_whoami)
     bal = mk(sub, "balance", "Your team's prepaid balance: credit left, calls in flight, recent spend.",
              "treg balance", "treg balance --limit 50", "treg balance --json    # micro-USD integers")
     bal.add_argument("--limit", type=int, default=20, help="how many recent ledger rows (default: 20)")

@@ -436,6 +436,9 @@ and `200` when it is on.
   README.md); `treg hub run . --input k=v` runs the folder for real, nothing stored; `treg hub
   publish .` validates, runs check.json once on your balance, and the tool is live on pass. Over
   MCP: `hub_create`, `hub_update`, `hub_mine`.
+- recipe.json rules: `summary` 1-200 characters; an input takes only `type`, `default`, `example`,
+  `note` (its description), `min`, `max`, `secret`; an input with no `default` is required; an `int`
+  needs a `max`; `capability` (optional) is a catalog capability id.
 - **Pricing** — your price only; the provider fees (catalog steps) are billed to the caller on
   top, and a failed run charges nothing. A steps recipe: `"pricing": {"price_usd": 0.02}`, a fixed
   price per successful run. A script: `"pricing": {"max_price_usd": 0.05}`, and the price itself in

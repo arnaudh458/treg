@@ -10,6 +10,20 @@
 // fact. The email status is always one of four values, whatever verifier answered: valid,
 // risky (the domain accepts everything, so the mailbox cannot be proven), invalid, unknown.
 
+// A WORK email only. Found live 2026-09-25 (hub simulation run 1): a finder returned a Gmail address
+// for a company's CMO, the checker called the mailbox valid, and the tool charged its fee. An address
+// at a free mail provider is never a work email; with a company domain given, the address must be at
+// that domain (or one of its subdomains). Anything else counts as not found, and no fee is charged.
+const FREE_MAIL = new Set(["gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "hotmail.com", "outlook.com",
+  "live.com", "msn.com", "icloud.com", "me.com", "mac.com", "aol.com", "proton.me", "protonmail.com", "gmx.com",
+  "gmx.net", "mail.com", "yandex.com", "yandex.ru", "qq.com", "163.com", "126.com", "zoho.com", "fastmail.com"]);
+
+function workEmail(email, domain) {
+  const at = String(email || "").toLowerCase().split("@")[1] || "";
+  if (!at || FREE_MAIL.has(at)) return false;
+  return !domain || at === domain || at.endsWith("." + domain);
+}
+
 export default async function run(ctx) {
   const who = identity(ctx.inputs);
   if (!who) throw new Error("give linkedin_url, or full_name + domain, or first_name + last_name + domain");
@@ -19,6 +33,10 @@ export default async function run(ctx) {
   const f = await call("treg.people.email.find", who);
   const found = f.status === 200 && f.json && f.json.output;
   const foundBy = f.status === 200 && f.json && f.json._treg && f.json._treg.served_by || null;
+  if (found && found.email && !workEmail(found.email, who.domain)) {
+    ctx.log(`dropped ${found.email} from ${foundBy}: not a work email${who.domain ? " at " + who.domain : ""}`);
+    found.email = null;
+  }
   if (!found || !found.email) {
     ctx.log(`no email found (${f.status})`);
     return { email: null, email_status: "not_found", found_by: foundBy, verified_by: null,
