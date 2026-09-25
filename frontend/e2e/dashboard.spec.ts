@@ -32,6 +32,10 @@ test('sign in, create team, switch pages, refresh and navigate back', async ({ p
   await page.locator('.rd-account-menu summary').click()
   await page.locator('.rd-account-menu').getByRole('button', { name: 'Billing', exact: true }).click()
   await expect(page).toHaveURL(/#orgs$/)
+  const referral = page.getByRole('link', { name: 'Refer a friend: Give $5, get $5', exact: true })
+  await expect(referral).toHaveText('Give $5, get $5')
+  await referral.click()
+  await expect(page).toHaveURL(/#referrals$/)
   expect(errors).toEqual([])
 })
 
