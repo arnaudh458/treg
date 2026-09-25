@@ -866,7 +866,7 @@ stays in the price column, and the provider/endpoint counts live in the cell's t
 a second line of their own.
 
 **Merged rows expand in TWO levels.** Clicking one opens its providers as collapsed `.lsub` sub-rows —
-one line each: logo, name, `costShort`, ✓/·, the connected chip, and a truncated `METHOD path`.
+one line each: logo, name, `costShort`, a ✓ when verified, the connected chip, and a truncated `METHOD path`.
 Clicking a sub-row (`toggleEp` → `epOpen[e.id]`) opens **that** provider's instruction. Dropping six
 full parameter tables on one click buried the comparison the merge exists to make. A single row has
 nothing to compare, so it skips the middle level and renders its detail straight away — the SAME
@@ -875,12 +875,19 @@ the instruction differently. Inside a merged sub-row the detail drops the provid
 sub-row above already shows, and leads with the chips.
 
 **The filter bar is sticky** under the top bar, and the section headings stick under *it* (`--lbar-top` /
-`--lsec-top`); the domain chips **scroll** rather than wrap, because a bar that grew a second row as you
-filtered would push the headings out from under it. Text, `verified only` and the domain chips narrow the
+`--lsec-top`). The domain chips **wrap**: a scrolling strip with a hidden scrollbar cut its last chip in
+half and gave a mouse no way to reach the rest. So the bar's height varies with the platform and the
+filters, and `stickLedgerBar` (PlatformPage.vue) measures it and writes `--lsec-top` on the bar's parent;
+the redesign shell redeclares the variable on its own element, so a value on the document root never
+reached the headings. At phone width nothing sticks (a wrapped bar would cover half the screen) and each
+row stacks: title, then route, price and ✓ on one line, with the separator drawn on the row. Unverified
+rows show nothing in the Verified column. Text, `verified only` and the domain chips narrow the
 same row list (`platRowsPreDomain` → `platLedger`); a section with no surviving rows disappears rather
 than showing an empty heading, chip counts are taken after the other two filters so a chip never promises
-rows they have already removed, and a live `N rows · M endpoints` line counts both — a merged row stands
-for several endpoints. Both the wrapper and the table drop their `overflow` clip (an `overflow:hidden`
+rows they have already removed, and a live `N rows · M endpoints` line counts both when they differ — a
+merged row stands for several endpoints. Only the wrapper draws the rounded frame: a collapsed table cannot
+round its own border, so a second one showed as a square frame inside it, and the last row's cells round
+their own corners because nothing clips a hover fill. Both the wrapper and the table drop their `overflow` clip (an `overflow:hidden`
 ancestor is a scroll container, and a sticky heading inside one never escapes it) and the table is
 `table-layout:fixed`, so a nowrap path or `treg call` line scrolls **inside** its cell instead of widening
 the table past the page.
