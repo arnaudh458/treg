@@ -2255,6 +2255,9 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=404, detail="Not Found")
     row = await hub_app.tool_for(db, raw)
     if row is None:
+        if await hub_app.is_rejected(db, hub_app.split_id(raw)[0]):
+            raise HTTPException(status_code=410, detail=(
+                "treg's review rejected this hub tool: it cannot be called by other teams"))
         raise HTTPException(status_code=404, detail="no such hub tool")
     org = await db.get(Org, row.org_id)
     maker = org.slug if org else ""
@@ -2274,11 +2277,11 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
     label = hub_price_label(m)
     fees = any("." in u for u in m.get("uses", []))
     if pricing["mode"] == "charge":
-        price_line = f"seller {label}" + hub_fees_label(m)
+        price_line = f"seller {label}" + hub_fees_label(m, raw_rng)
         per_k = "the script sets each run's price, never above the cap"
     else:
         p_usd = pricing["price_usd"]
-        price_line = (f"seller ${p_usd:.6g}" if p_usd else "free") + hub_fees_label(m)
+        price_line = (f"seller ${p_usd:.6g}" if p_usd else "free") + hub_fees_label(m, raw_rng)
         per_k = f"${p_usd * 1000:,.2f} per 1,000 runs" if p_usd else "no seller price"
     rng = hub_app.with_range(m, raw_rng)
     price_range = rng["price_range"]

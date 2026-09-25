@@ -21,6 +21,8 @@ export default { setup: useDashboard }
                 <td><b>{{r.tool_id}}</b><span v-if="r.version" class="muted"> v{{r.version}} · {{r.kind}}</span>
                   <div class="sub" style="margin:2px 0 0;max-width:52ch">{{r.live ? r.summary : 'no live version'}}</div>
                   <div v-if="r.reason" class="sub" style="margin:2px 0 0">Reason: {{r.reason}}</div>
+                  <div v-if="r.own_tools && r.own_tools.length" class="sub" style="margin:2px 0 0">Own tools: <span v-for="o in r.own_tools" :key="o.name"><code>{{o.name}}</code> → {{o.base_url}} </span></div>
+                  <details v-if="r.script || r.steps" style="margin:4px 0 0"><summary class="sub">Read the {{r.script ? 'script' : 'steps'}}</summary><pre class="code">{{r.script || JSON.stringify(r.steps, null, 2)}}</pre></details>
                   <div class="sub" style="margin:2px 0 0">Job: <input v-if="admHub.state!=='approved'" v-model="admHub.cap[r.tool_id]" :placeholder="r.proposed_capability||'none'" style="width:190px" aria-label="Capability to approve"/><code v-else>{{r.capability||'none'}}</code>
                     <span v-if="admHub.state!=='approved' && r.proposed_capability" class="muted"> proposed: {{r.proposed_capability_description}} ({{r.proposed_capability_providers}} providers)</span></div></td>
                 <td class="muted">{{r.price_label||'-'}}</td>
@@ -43,6 +45,8 @@ export default { setup: useDashboard }
                 <td class="sub"><template v-if="u.new">v{{u.new.version}} · {{u.new.price_label}} · check {{u.new.check}}<div style="max-width:40ch">{{u.new.summary}}</div>
                     <div v-if="u.now && JSON.stringify(u.now.uses)!==JSON.stringify(u.new.uses)">uses: {{u.new.uses.join(', ')}}</div></template>
                   <div v-if="u.new_price_usd!=null"><b>new price: ${{u.new_price_usd}}</b></div>
+                  <div v-if="u.own_tools && u.own_tools.length" class="sub">Own tools: <span v-for="o in u.own_tools" :key="o.name"><code>{{o.name}}</code> → {{o.base_url}} </span></div>
+                  <details v-if="u.code_diff" style="margin:4px 0 0"><summary class="sub">Read what changed in the code</summary><pre class="code">{{u.code_diff}}</pre></details>
                   <div v-if="u.fields_lost && u.fields_lost.length" class="warn"><b>no longer returns:</b> {{u.fields_lost.join(', ')}} <span class="muted">(filled in the approved version's check, empty in this one's)</span></div></td>
                 <td style="text-align:right;white-space:nowrap">
                   <input v-model="admHub.reason['u:'+u.tool_id]" placeholder="reason, to reject" style="width:160px" aria-label="Reason to reject the update"/>
@@ -93,4 +97,5 @@ export default { setup: useDashboard }
 
 <style scoped>
 .warn{color:var(--amber)}
+.code{max-height:320px;overflow:auto;font-size:12px;white-space:pre;background:var(--bg2, rgba(127,127,127,.08));padding:8px;border-radius:6px;max-width:60ch}
 </style>

@@ -51,8 +51,11 @@ async def health_of(db: AsyncSession, tool_id: str, version: int, check_result: 
     return Health(state, fails, rows[0][1].isoformat() if rows[0][1] else None, check_result)
 
 
-def verdict_from(row: HubTool, status_code: int, body: Any, headers: dict[str, str]) -> dict[str, Any]:
-    """The check's verdict from a run's answer: the rule publish uses, in one place."""
+def verdict_from(row: HubTool, status_code: int, body: Any, headers: dict[str, str],
+                 check: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The check's verdict from a run's answer: the rule publish uses, in one place. `check` is one
+    case of a several-case check.json; the default is the tool's first case."""
+    check = check if check is not None else row.check
     from datetime import datetime, timezone
     v: dict[str, Any] = {"run_id": headers.get("x-treg-run-id") or headers.get("X-Treg-Run-Id"),
                          "checked_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
@@ -66,8 +69,8 @@ def verdict_from(row: HubTool, status_code: int, body: Any, headers: dict[str, s
             v["error"] = {**v["error"], "hint": "the check runs on your own balance at the normal step prices; top up and publish again"}
         return v
     output = body.get("output") if isinstance(body, dict) else None
-    missing = [f for f in row.check.get("fields", []) if not isinstance(output, dict) or output.get(f) in (None, "", [], {})]
-    min_rows = int(row.check.get("min_rows", 0) or 0)
+    missing = [f for f in check.get("fields", []) if not isinstance(output, dict) or output.get(f) in (None, "", [], {})]
+    min_rows = int(check.get("min_rows", 0) or 0)
     rows_short = None
     if min_rows and isinstance(output, dict):
         lists = [x for x in output.values() if isinstance(x, list)]

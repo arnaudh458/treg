@@ -66,6 +66,23 @@ OLD_VERSION_DAYS = 30   # a pinned old version stays callable this long after a 
 
 async def tool_for(db: AsyncSession, rest: str, *, live_only: bool = True,
                    caller_org_id: int | None = None, caller_slug: str | None = None) -> HubTool | None:
+    """`_tool_for`, except that a tool whose listing treg REJECTED serves only its maker's team:
+    another team's call and the public views get nothing (hub simulation run 3: a rejected
+    "Official Hunter.io" tool stayed callable by id and share link). A tool never reviewed stays
+    callable by id, so a maker can build and share before asking for search."""
+    row = await _tool_for(db, rest, live_only=live_only, caller_org_id=caller_org_id, caller_slug=caller_slug)
+    if row is None or (caller_org_id is not None and row.org_id == caller_org_id):
+        return row
+    return None if await is_rejected(db, row.tool_id) else row
+
+
+async def is_rejected(db: AsyncSession, tool_id: str) -> bool:
+    lst = await db.get(HubListing, tool_id)
+    return lst is not None and lst.state == "rejected"
+
+
+async def _tool_for(db: AsyncSession, rest: str, *, live_only: bool = True,
+                    caller_org_id: int | None = None, caller_slug: str | None = None) -> HubTool | None:
     """The version that serves `rest`: the newest `live` one, or `@N` pinned. A pinned version may
     also be the one UNDER CHECK (the check run pins it: HUB-DECISIONS round 2 q10), and a pinned
     old version stays callable for OLD_VERSION_DAYS after a newer live one exists (round 4 q8)."""
@@ -197,15 +214,25 @@ async def run_check(db: AsyncSession, row: HubTool, *, maker_headers: dict[str, 
     headers["X-Treg-Client"] = "hub-check"
     headers[hub_runner.RUN_MAX_COST_HEADER] = "5.00"
     try:
+        from .health import verdict_from
+        cases = row.check.get("cases") or [row.check]
+        verdict: dict[str, Any] = {}
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://treg.internal",
                                      headers=headers, timeout=200.0) as client:
-            r = await client.post(f"/call/{row.tool_id}@{row.version}", json=row.check.get("inputs", {}))
-        from .health import verdict_from
-        try:
-            body = r.json()
-        except ValueError:
-            body = {"text": r.text[:600]}
-        verdict = verdict_from(row, r.status_code, body, dict(r.headers))
+            for i, case in enumerate(cases):
+                r = await client.post(f"/call/{row.tool_id}@{row.version}", json=case.get("inputs", {}))
+                try:
+                    body = r.json()
+                except ValueError:
+                    body = {"text": r.text[:600]}
+                v = verdict_from(row, r.status_code, body, dict(r.headers), check=case)
+                if i == 0:
+                    verdict = v                   # the first case's run is the one the reviewer compares
+                if v["status"] != "passed":
+                    verdict = {**v, **({"case": i + 1} if len(cases) > 1 else {})}
+                    break
+        if verdict.get("status") == "passed" and len(cases) > 1:
+            verdict["cases"] = len(cases)
         row.status = "live" if verdict["status"] == "passed" else "failed"
         if row.status == "live":
             await _hold_for_review(db, row)
@@ -248,14 +275,21 @@ async def price_ranges(db: AsyncSession, tools: dict[str, dict[str, Any]], *, da
                                if isinstance(e, dict) and e.get("outcome") == "charged")
     # Runs by other teams decide the number once there are any; before that the maker's own runs and
     # checks stand in, marked `from_tests` (hub simulation run 2: free own runs shaped the figure).
+    # Only runs of the version the manifest belongs to: an unapproved version's check run moved the
+    # serving version's public price (hub simulation run 3).
     buckets: dict[str, dict[bool, dict[str, Any]]] = {}
-    for rid, tid, cost, price, is_own in (await db.execute(
-            select(HubRun.id, HubRun.tool_id, HubRun.cost_micro, HubRun.price_micro, own)
+    for rid, tid, ver, cost, price, is_own in (await db.execute(
+            select(HubRun.id, HubRun.tool_id, HubRun.version, HubRun.cost_micro, HubRun.price_micro, own)
             .where(*recent))).all():
+        if tools[tid].get("version") and ver != tools[tid]["version"]:
+            continue
         total = int(cost or 0) + seller_part_micro(tools[tid], None if is_own else int(price or 0),
                                                    charged.get(rid, 0))
-        r = buckets.setdefault(tid, {}).setdefault(bool(is_own), {"low_micro": total, "high_micro": total, "samples": 0})
+        fee = int(cost or 0)
+        r = buckets.setdefault(tid, {}).setdefault(bool(is_own), {"low_micro": total, "high_micro": total, "samples": 0,
+                                                                  "fees_low_micro": fee, "fees_high_micro": fee})
         r["low_micro"], r["high_micro"] = min(r["low_micro"], total), max(r["high_micro"], total)
+        r["fees_low_micro"], r["fees_high_micro"] = min(r["fees_low_micro"], fee), max(r["fees_high_micro"], fee)
         r["samples"] += 1
     out: dict[str, dict[str, Any]] = {}
     for tid, b in buckets.items():
@@ -451,7 +485,7 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
             "platform": "", "tier": "core", "verified": True,
             "method": "POST", "path": f"/call/{tid}", "writes": r.writes,
             "cost": {"type": "per_success", "usd": worst, "currency": "USD", "unit": "run"},
-            "price_line": "seller " + price_label(m) + fees_label(m), "price_label": price_label(m),
+            "price_line": "seller " + price_label(m) + fees_label(m, ranges.get(tid)), "price_label": price_label(m),
             **with_range(m, ranges.get(tid)),
             "made_of": len(m.get("uses", [])),
         }
@@ -526,7 +560,11 @@ async def pending_listings(db: AsyncSession, state: str = "requested") -> list[d
                     "live": tool is not None,
                     **({"version": tool.version, "kind": tool.kind, "summary": tool.summary,
                         "price_label": price_label(tool.manifest), "uses": tool.manifest.get("uses", []),
-                        "check": (tool.check_result or {}).get("status")} if tool else {})})
+                        "check": (tool.check_result or {}).get("status"),
+                        # What the reviewer approves is the code, not the summary (hub simulation run 3:
+                        # a date switch in run.js was invisible to the queue).
+                        "script": tool.script, "steps": tool.manifest.get("steps"),
+                        "own_tools": await own_tool_urls(db, tool)} if tool else {})})
     return out
 
 
@@ -600,7 +638,7 @@ async def capability_siblings(db: AsyncSession, capability: str, *, exclude: str
                     "path": f"/call/{tid}",
                     "cost": {"type": "per_success", "usd": worst_usd(r.manifest, r.price_micro, ranges.get(tid)),
                              "currency": "USD", "unit": "run"},
-                    "price_line": "seller " + price_label(r.manifest) + fees_label(r.manifest),
+                    "price_line": "seller " + price_label(r.manifest) + fees_label(r.manifest, ranges.get(tid)),
                     **with_range(r.manifest, ranges.get(tid)),
                     "observed": seeded_observed(ok, runs)})
     return out
@@ -674,6 +712,8 @@ async def pending_updates(db: AsyncSession) -> list[dict[str, Any]]:
                                                           HubTool.version == lst.pending_version))).scalars().first()
         out.append({"tool_id": lst.tool_id, "now": side(now), "new": side(new),
                     "new_price_usd": (lst.pending_pricing or {}).get("price_usd"),
+                    "code_diff": _code_diff(now, new),
+                    "own_tools": await own_tool_urls(db, new) if new is not None else [],
                     "fields_lost": await _fields_lost(db, now, new)})
     return out
 
@@ -729,4 +769,49 @@ async def own_hosts(db: AsyncSession, row: HubTool) -> list[str]:
         return []
     hosts = (await db.execute(select(Tool.host).where(Tool.org_id == row.org_id, Tool.name.in_(names)))).scalars().all()
     return sorted({h for h in hosts if h})
+
+
+def treg_hosts() -> set[str]:
+    """treg's own hosts: this deployment's public URL and the hosted service's names. A team's own tool
+    pointed at one of them turns a hub tool into a relay to another hub tool, which the depth-one rule
+    and the review exist to stop (hub simulation run 3: `treg-relay` -> https://<treg>/call)."""
+    from urllib.parse import urlsplit
+    from ...config import PUBLIC_HOST_ALIASES
+    return {h for h in {(urlsplit(get_settings().public_url).hostname or "").lower(), *PUBLIC_HOST_ALIASES} if h}
+
+
+def points_at_treg(base_url: str) -> bool:
+    from urllib.parse import urlsplit
+    return (urlsplit(base_url or "").hostname or "").lower() in treg_hosts()
+
+
+def _code(t: HubTool | None) -> str:
+    if t is None:
+        return ""
+    if t.kind == "script":
+        return t.script or ""
+    import json as _json
+    return _json.dumps(t.manifest.get("steps") or [], indent=2)
+
+
+def _code_diff(now: HubTool | None, new: HubTool | None) -> str:
+    """A unified diff of the code a reviewer approves (run.js, or the steps), approved -> new. With
+    no approved version to compare, the new code in full."""
+    import difflib
+    if new is None:
+        return ""
+    if now is None:
+        return _code(new)
+    return "".join(difflib.unified_diff(_code(now).splitlines(True), _code(new).splitlines(True),
+                                        fromfile=f"v{now.version}", tofile=f"v{new.version}"))
+
+
+async def own_tool_urls(db: AsyncSession, row: HubTool) -> list[dict[str, str]]:
+    """The maker's own tools a version calls, with their base URLs, for the reviewer (not public)."""
+    names = [u for u in row.manifest.get("uses", []) if "." not in u]
+    if not names:
+        return []
+    rows = (await db.execute(select(Tool.name, Tool.base_url).where(
+        Tool.org_id == row.org_id, Tool.name.in_(names)))).all()
+    return [{"name": n, "base_url": b} for n, b in rows]
 

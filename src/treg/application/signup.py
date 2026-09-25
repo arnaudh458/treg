@@ -21,10 +21,12 @@ from ..timeutil import utcnow_naive as _utcnow_naive
 
 
 def reserved_team_names() -> frozenset[str]:
-    """Every catalog provider and platform slug: no team may take one as its name."""
+    """Every catalog provider slug (a team may not read as one) and every platform slug, marked "="
+    (only the whole name: platforms are ordinary words like `people` or `web`)."""
     from ..domain.catalog import store as catalog_store
     cat = catalog_store.load()
-    return frozenset({e["provider"] for e in cat.endpoints} | set(getattr(cat, "platforms", {}) or {}))
+    providers = {e["provider"] for e in cat.endpoints}
+    return frozenset(providers | {"=" + p for p in (getattr(cat, "platforms", {}) or {}) if p not in providers})
 
 
 class SignupError(Exception):

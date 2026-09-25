@@ -173,6 +173,18 @@ async def run_hub_tool(
     maker = await _maker_snapshot(parent, tool)
     catalog = catalog_store.load()
     own_tools = {u for u in manifest["uses"] if "." not in u}
+    if own_tools:
+        # A maker's own tool pointed at treg itself is a relay to other hub tools (hub simulation
+        # run 3). Refused when the tool is added; checked again here for a tool added before that.
+        from . import points_at_treg
+        from ...models import Tool
+        async with session_maker() as s:
+            urls = (await s.execute(select(Tool.base_url).where(
+                Tool.org_id == tool.org_id, Tool.name.in_(sorted(own_tools))))).scalars().all()
+        if any(points_at_treg(u) for u in urls):
+            raise ResolutionFailed("hub_not_runnable", status_code=424, detail={
+                "error": "hub_not_runnable", "message": "one of this tool's own tools points at treg itself; "
+                "a hub tool may not relay to other hub tools"})
     pricing = hub_manifest.pricing_micro(manifest)
     # The hold is the most the maker can earn on this run: a recipe's fixed price, or a script's
     # `max_price_usd` (the cap on its ctx.charge lines, which the caller saw before the run).

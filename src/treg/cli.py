@@ -5594,7 +5594,10 @@ def cmd_hub_ls(args, cfg) -> None:
                 search += " · update waits"
         status = t["status"] + (" ◀" if is_serving else "")
         print(f"  {t['tool_id']:<40}{t['version']:>3}  {colour}{status:<11}{_R}{t['kind']:<7}{price[:21]:<22}{search:<20}{', '.join(t['uses'])[:30]}")
-        if is_serving:
+        # The reasons go under the version callers get, or under the newest row when none is live
+        # (hub simulation run 3: every version retired, a rejected update showed no reason).
+        first_row = t is next(x for x in rows if x["tool_id"] == t["tool_id"])
+        if is_serving or (first_row and t["tool_id"] not in serves):
             lst = t.get("listing") or {}
             upd = lst.get("update") or {}
             if lst.get("reason") and lst.get("state") in ("rejected", "requested"):

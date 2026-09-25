@@ -1581,3 +1581,49 @@ async def test_the_update_queue_names_fields_the_new_version_stopped_returning(c
     assert r.json()["status"] == "review", r.text
     queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
     assert queue[0]["fields_lost"] == ["count"]
+
+
+async def test_a_check_can_hold_several_cases(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 3: one sample could not reach both paths of a tool. Every case runs at
+    publish; the first that fails fails the check and names its number."""
+    script = ("export default async function run(ctx) {"
+              "  return ctx.inputs.search === 'none' ? { rows: [], count: 0 } : { rows: [1], count: 1 };"
+              "}")
+    m = _script_manifest(uses=[], pricing={"max_price_usd": 0.01})
+    ok = {"cases": [{"inputs": {}, "fields": ["rows"]}, {"inputs": {"search": "x"}, "fields": ["count"]}]}
+    r = await clients.post("/hub/tools", json={"manifest": m, "script": script, "readme": "x", "check": ok})
+    assert r.status_code == 201 and r.json()["status"] == "live" and r.json()["check"]["cases"] == 2, r.text
+    bad = {"cases": [{"inputs": {}, "fields": ["rows"]}, {"inputs": {"search": "none"}, "fields": ["rows"]}]}
+    r = await clients.put(f"/hub/tools/{r.json()['tool_id']}", json={"manifest": m, "script": script, "readme": "x", "check": bad})
+    assert r.json()["status"] == "failed" and r.json()["check"]["case"] == 2
+    err = await clients.post("/hub/tools", json={"manifest": {**m, "name": "other"}, "script": script, "readme": "x",
+                                                 "check": {"cases": [{"inputs": {"nope": 1}, "fields": ["rows"]}]}})
+    assert err.status_code == 422 and err.json()["detail"]["field"] == "check.cases[0].inputs.nope"
+
+
+async def test_a_maker_cannot_review_its_own_hub_tool(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    run = await clients.post(f"/call/{pub['tool_id']}", json={"domain": "x"})
+    assert run.status_code == 200
+    r = await clients.post("/reviews", json={"call_id": run.json()["run_id"], "usefulness": "useful"})
+    assert r.status_code == 400 and "own hub tool" in r.text, r.text
+
+
+async def test_a_team_tool_may_not_point_at_treg(clients: AsyncClient, hub_on):
+    sid = (await clients.post("/secrets", json={"name": "relay-key", "value": "K"})).json()["id"]
+    from treg.config import get_settings
+    host = get_settings().public_url.rstrip("/")
+    r = await clients.post("/tools", json={"name": "relay", "base_url": f"{host}/call", "secret_id": sid})
+    assert r.status_code == 422 and "treg itself" in r.text
+
+
+async def test_a_rejected_tool_serves_only_its_maker(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    await _decide(clients, monkeypatch, tool_id, "reject", "poses as someone else")
+    other = {"X-Treg-Token": (await funded_user(clients, "rejected-caller@example.com"))["token"]}
+    assert (await clients.post(f"/call/{tool_id}", json={"domain": "x"}, headers=other)).status_code == 404
+    assert (await clients.post(f"/call/{tool_id}", json={"domain": "x"})).status_code == 200      # the maker
+    assert (await clients.get(f"/hub/{tool_id}")).status_code == 410
+    assert (await clients.get(f"/catalog/endpoints/{tool_id}")).status_code == 404

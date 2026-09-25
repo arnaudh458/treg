@@ -435,7 +435,7 @@ def price_label(manifest: dict[str, Any]) -> str:
     return f"${p['price_usd']:.6g} a run" if p["price_usd"] else "free"
 
 
-def fees_label(manifest: dict[str, Any]) -> str:
+def fees_label(manifest: dict[str, Any], rng: dict[str, Any] | None = None) -> str:
     """The provider-fee half of a hub tool's price line, with its limit: "+ provider fees up to $1 a
     run" (the tool's `limits.cost_usd`, else the runner's $1.00 default; a caller's
     X-Treg-Run-Max-Cost lowers it). Empty when the tool calls only its maker's own tools. Found in
@@ -443,7 +443,12 @@ def fees_label(manifest: dict[str, Any]) -> str:
     if not any("." in u for u in manifest.get("uses", [])):
         return ""
     cap = (manifest.get("limits") or {}).get("cost_usd") or 1.0
-    return f" + provider fees up to ${float(cap):.6g} a run"
+    # The limit alone read as the likely cost (hub simulation run 3); what runs have paid comes first.
+    lo, hi = (rng or {}).get("fees_low_micro"), (rng or {}).get("fees_high_micro")
+    if lo is None or hi is None:
+        return f" + provider fees (at most ${float(cap):.6g} a run)"
+    seen = f"${lo / 1e6:.6g}" if lo == hi else f"${lo / 1e6:.6g}–${hi / 1e6:.6g}"
+    return f" + provider fees (about {seen} so far, at most ${float(cap):.6g} a run)"
 
 
 PAY_NOTE = ("a failed run pays no seller price; the provider fees of the steps that ran are still "
@@ -538,9 +543,31 @@ def _validate_output_script(raw: Any) -> dict[str, Any]:
     return {"fields": list(dict.fromkeys(fields))}
 
 
+MAX_CHECK_CASES = 5
+
+
 def validate_check(raw: Any, inputs: dict[str, dict[str, Any]], output_fields: list[str]) -> dict[str, Any]:
-    """`check.json`: sample inputs and the least the answer must contain. Validated against the
-    manifest so a check that can never pass is refused before anyone pays for it."""
+    """`check.json`: sample inputs and the least the answer must contain, or `{"cases": [...]}`,
+    up to MAX_CHECK_CASES of those, each run at publish (hub simulation run 3: one sample could not
+    reach both the verified and the risky path of an email tool). The first case's keys stay at the
+    top level, where the scheduled check reads them."""
+    if isinstance(raw, dict) and "cases" in raw:
+        if set(raw) != {"cases"}:
+            raise _fail("check", "with `cases`, nothing else at the top level")
+        cases = raw["cases"]
+        if not isinstance(cases, list) or not (1 <= len(cases) <= MAX_CHECK_CASES):
+            raise _fail("check.cases", f"a list of 1-{MAX_CHECK_CASES} checks, each with `inputs` and `fields`")
+        done = []
+        for i, case in enumerate(cases):
+            try:
+                done.append(_validate_one_check(case, inputs, output_fields))
+            except ManifestError as exc:
+                raise _fail(exc.field.replace("check", f"check.cases[{i}]", 1), exc.rule) from None
+        return {**done[0], "cases": done}
+    return _validate_one_check(raw, inputs, output_fields)
+
+
+def _validate_one_check(raw: Any, inputs: dict[str, dict[str, Any]], output_fields: list[str]) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise _fail("check", "must be a JSON object with `inputs` and `fields`")
     extra = sorted(set(raw) - {"inputs", "fields", "min_rows"})

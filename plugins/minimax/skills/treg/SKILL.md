@@ -309,6 +309,7 @@ hub turned on yet, and use the rest of the catalog. `treg hub ls` is the cheapes
 recipe.json   the manifest: name, summary, inputs, uses, output, pricing; steps OR "script": "run.js"
 run.js        export default async function run(ctx) { ... }   (script recipes only)
 check.json    sample inputs + the output fields the check must find; run once for real at publish
+              (or {"cases": [...]}, up to 5, e.g. one per path of your tool)
 README.md     what it does, for a human
 ```
 

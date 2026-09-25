@@ -102,9 +102,13 @@ async def _publish(body: PublishIn, request: Request, caller: Caller, db: AsyncS
         out["call"] = f"POST /call/{published.tool_id}"
         out["page"] = f"{get_settings().public_url.rstrip('/')}/hub/{published.tool_id}"
     elif row.status == "review":
-        out["message"] = (f"passed its check and waits for treg's review: {published.tool_id} is listed, so "
-                          f"callers keep the approved version until this one is approved. Try it yourself "
-                          f"with POST /call/{published.tool_id}@{published.version}.")
+        # Say what callers get NOW: with every approved version retired, nothing (hub simulation run 3).
+        serving = (await db.execute(select(HubTool.version).where(
+            HubTool.tool_id == published.tool_id, HubTool.status == "live").order_by(HubTool.version.desc()).limit(1))).scalar_one_or_none()
+        now = (f"callers keep version {serving} until this one is approved" if serving is not None
+               else "no version serves callers until this one is approved")
+        out["message"] = (f"passed its check and waits for treg's review: treg approved {published.tool_id} "
+                          f"before, so {now}. Try it yourself with POST /call/{published.tool_id}@{published.version}.")
     return out
 
 
@@ -157,7 +161,13 @@ async def my_hub_tools(
     newest: dict[str, dict] = {}
     for r in rows:
         newest.setdefault(r.tool_id, r.manifest)
-    ranges = await hub_app.price_ranges(db, newest)
+    # The price range belongs to the version callers get (the newest live one), not to a version
+    # waiting for review.
+    serving: dict[str, dict] = {}
+    for r in rows:
+        if r.status == "live":
+            serving.setdefault(r.tool_id, r.manifest)
+    ranges = await hub_app.price_ranges(db, serving)
     listings = await hub_app.listings_of(db, list(newest))
     out = []
     for r in rows:

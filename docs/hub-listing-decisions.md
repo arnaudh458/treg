@@ -100,3 +100,21 @@ are marked as tests. **5. The contract names the maker's own server hosts** a to
 
 Not decided: re-reviewing a tool when the maker's own server changes; the maker is only disclosed.
 
+## Round 6 — the same seller again (2026-09-25, owner, after hub simulation run 3)
+
+Run 2's holes held. New ones, decided:
+
+**1. A rejected tool is not callable by other teams**; its share page answers 410. A tool never
+reviewed stays callable by id, so makers can build and share before asking for search.
+
+**2. Names are judged as they read:** lookalike letters, digits and separators do not get round the
+reserved names (`trеg-hub`, `tregg`, `hunter-io`, `Hunter.io data`, `apol1o`, `verified-partner`).
+
+**3. No relays:** a team tool may not point at treg itself.
+
+**4. The reviewer reads the code:** the script or steps, a diff for an update, and the own tools'
+addresses. check.json may carry several cases. A maker cannot review its own tool.
+
+**5. Routing says who bills a miss:** a routed price no longer claims "you pay exactly the child
+that served"; it names the children that bill a miss.
+

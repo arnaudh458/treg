@@ -89,17 +89,43 @@ MAX_ORG_NAME = 80
 SLUG_LEN = (3, 40)
 
 
+# Letters that look like Latin ones in other scripts, and digits that stand in for letters: a name is
+# judged by how it READS (hub simulation run 3: `trеg-hub` with a Cyrillic е, `apol1o`, passed).
+_LOOKALIKE = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+    "к": "k", "м": "m", "н": "h", "т": "t", "в": "b", "г": "r", "ԁ": "d", "ɡ": "g", "ⅼ": "l",
+    "α": "a", "ε": "e", "ο": "o", "ρ": "p", "τ": "t", "υ": "u", "ν": "v", "κ": "k", "ι": "i", "η": "n",
+    "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t", "$": "s", "@": "a",
+})
+_KEPT_WORDS = ("official", "verified")
+
+
+def _reads_as(text: str) -> tuple[list[str], str]:
+    """The name as a reader sees it: NFKC-folded, lookalike letters mapped, lowercased; returns its
+    words and the words joined with nothing between them."""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", text or "").lower().translate(_LOOKALIKE)
+    words = [w for w in re.split(r"[^a-z0-9]+", s) if w]
+    return words, "".join(words)
+
+
 def reserved_reason(text: str, extra: frozenset[str] | set[str] = frozenset()) -> str | None:
     """Why a team name or slug is reserved, or None. A team's slug is the first half of every hub
     tool id it publishes (`<slug>.<name>`) and the "by <team>" on its pages, so a name that reads as
-    treg itself, as an official source, or as a catalog provider or platform (`extra`, from the
-    catalog) would let a stranger's tool pass for ours or theirs (hub simulation run 2: a team
-    `treg` published `treg.companies-enrich`). Superadmins may still use one."""
-    s = _slugify(text or "")
-    if s == "treg" or s.startswith("treg-") or "official" in s:
-        return f"{text!r} is reserved: names that read as treg itself or as official are kept for treg"
-    if s in extra:
-        return f"{text!r} is reserved: it is the name of a provider or platform in the treg catalog"
+    treg itself, as official, or as a catalog provider (`extra`, from the catalog) would let a
+    stranger's tool pass for ours or theirs (hub simulation runs 2 and 3). Judged as it reads:
+    lookalike letters mapped, separators removed, so `trеg-hub`, `t-r-e-g`, `tregg`, `hunter-io`
+    and `Hunter.io data` are all caught. Superadmins may still use one."""
+    words, joined = _reads_as(text)
+    if joined.startswith("treg") or "treg" in words or any(w.startswith("treg") for w in words):
+        return f"{text!r} is reserved: names that read as treg itself are kept for treg"
+    if any(w.startswith(k) for w in words for k in _KEPT_WORDS):   # a word, so "unverified" passes
+        return f"{text!r} is reserved: a team may not call itself official or verified"
+    for name in extra:
+        exact = name.startswith("=")           # a platform (people, web, ...): only the whole name
+        flat = _reads_as(name.lstrip("="))[1]
+        if flat and (joined == flat or (not exact and (flat in words or (len(flat) >= 5 and joined.startswith(flat))))):
+            return f"{text!r} is reserved: it reads as {name!r}, a provider or platform in the treg catalog"
     return None
 
 

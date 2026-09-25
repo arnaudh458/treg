@@ -330,12 +330,27 @@ bump; a script's amounts change only with a new version of run.js.
   never approved is deleted by unlisting, and that tool stays self-serve. A rejection's reason stays
   on the row while the maker asks again. The approved capability stays across an approved update;
   the admin changes it by approving the listing again.
-- **Team names** (round 5): a team whose slug or name is `treg`, starts with `treg-`, contains
-  `official`, or equals a catalog provider or platform slug (`reserved_reason`,
-  `signup.reserved_team_names`) cannot be created or renamed to, and cannot publish a hub tool,
-  unless a superadmin acts. A hub id starts with the team slug, so such a team would publish tools
-  that pass for treg's or a provider's own. The email-derived default team of a new user falls back
-  to `team-<user id>`.
+- **Team names** (rounds 5-6): `reserved_reason` judges a name as it reads (`_reads_as`: NFKC,
+  lookalike letters and digits mapped to Latin, split into words): refused when it begins with or
+  has a word beginning with `treg`, has a word beginning with `official` or `verified`, or reads as
+  a catalog provider (a word equal to it, or the whole name beginning with a name of 5+ letters);
+  a platform (`=`-marked in `signup.reserved_team_names`, ordinary words like `people`) only as the
+  whole name. Such a team cannot be created, renamed to, or publish a hub tool unless a superadmin
+  acts: a hub id starts with the team slug. A new user's email-derived team falls back to
+  `team-<user id>`.
+- **Rejected means not callable** (round 6): `tool_for` serves a tool whose `HubListing.state` is
+  `rejected` only to its maker's team (`is_rejected`); another team's call gets 404, the share page
+  410, `catalog get` 404. A tool never reviewed stays callable by id.
+- **No relays** (round 6): a team tool's `base_url` may not be treg itself (`points_at_treg`,
+  `treg_hosts`: the public URL's host and `PUBLIC_HOST_ALIASES`), refused at `/tools` and again in
+  the runner for a tool added before, since it would let a hub tool call other hub tools.
+- **What the reviewer reads** (round 6): the listing queue carries the script (or steps) and the
+  own tools' base URLs (`own_tool_urls`); the update queue a unified diff of the code, approved to
+  new (`_code_diff`). check.json may hold `{"cases": [...]}`, up to 5, each run at publish; the
+  first failing case fails the check (`verdict.case`). A maker cannot review its own hub tool's
+  runs (`feedback.submit_review`). The public price counts only runs of the version priced
+  (`price_ranges` filters on the manifest's `version`; the maker's list prices the live version),
+  and the fee line names what runs paid ("about $0.005 so far, at most $0.1 a run").
 - **What a run charges** (round 5): an answer whose every declared output field is empty (None,
   "", [], {}) settles the seller price at 0 whatever the script charged (`runner._empty_answer`).
   The price line carries the provider-fee limit (`fees_label`: "+ provider fees up to $1 a run", the
