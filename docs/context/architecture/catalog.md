@@ -1690,7 +1690,9 @@ to choose (`docs/CAPABILITY-ROUTING-PLAN.md`). Everything else in the catalog st
   extra never disables the primary.
 - **The generated row** — `routing/synthetic.py`: every capability with ≥ 2 verified children gets
   `treg.<capability>` (`store.load` skips a `routed: false` contract) (`provider: treg`, `kind: routed`, `POST /<capability>`, `input` = the
-  contract, `cost` = the children's range, `routed_children`). Never hand-written; not in any
+  contract, `cost` = the children's range, `routed_children`, `miss_billed_by` = the children priced
+  per call or per result, whose provider bills an answer treg judges a miss: the caller pays those
+  too, and the cost note says so). Never hand-written; not in any
   provider file.
   `catalog_get` on it returns the contract and the ranked **plan** (the quote) —
   nothing is reserved.
