@@ -210,7 +210,8 @@ def _serpstat_result_count(doc: object) -> int | None:
     return None
 
 
-def _rows_billed_micro(mk: MarketplaceCall, ep: dict | None, rows: int | None) -> int | None:
+def _rows_billed_micro(mk: MarketplaceCall, ep: dict | None, rows: int | None,
+                       credits_per_row: Decimal | None = None) -> int | None:
     """What `rows` billed rows cost, never more than the hold. For a credit-priced row
     `mk.unit_micro` is ONE provider credit, so it is scaled by the row's credits (`cost.value`:
     2 per CompanyEnrich person, 10 per Icypeas reverse-email hit). Capped at the reserve because a
@@ -222,11 +223,11 @@ def _rows_billed_micro(mk: MarketplaceCall, ep: dict | None, rows: int | None) -
     per_row = mk.unit_micro
     if raw.get("currency") == "credit":
         try:
-            per_row = int(Decimal(str(raw.get("value") or 1)) * mk.unit_micro)
+            credits = credits_per_row if credits_per_row is not None else Decimal(str(raw.get("value", 1)))
+            per_row = int(credits * mk.unit_micro)
         except (InvalidOperation, ValueError):
             return None
-    billed = rows * per_row
-    return min(billed, mk.estimate_micro) if mk.estimate_micro > 0 else billed
+    return min(rows * per_row, mk.estimate_micro)
 
 
 def _tavily_requested_result_limit(mk: MarketplaceCall) -> int:
@@ -462,7 +463,12 @@ def _observed_cost_micro(mk: MarketplaceCall, body: bytes, headers=None) -> int 
     if provider == "companyenrich" and mk.cost_type == "per_result" and mk.unit_micro > 0:
         return _rows_billed_micro(mk, ep, _companyenrich_record_count(mk.endpoint_id, doc))
     if provider == "icypeas" and mk.cost_type == "per_result" and mk.unit_micro > 0:
-        return _rows_billed_micro(mk, ep, _icypeas_bulk_found_count(mk.endpoint_id, doc))
+        body = mk.request_data.get("body") if isinstance(mk.request_data, dict) else None
+        # The scrape row carries the dearer profile rate; a company batch is 0.5 credit a hit.
+        company = mk.endpoint_id == "icypeas.scrape.bulk" and isinstance(body, dict) \
+            and body.get("type") == "company"
+        return _rows_billed_micro(mk, ep, _icypeas_bulk_found_count(mk.endpoint_id, doc),
+                                  Decimal("0.5") if company else None)
     if provider == "serpstat" and mk.cost_type == "per_result" and mk.unit_micro > 0:
         return _rows_billed_micro(mk, ep, _serpstat_result_count(doc))
     if provider == "thecompaniesapi":

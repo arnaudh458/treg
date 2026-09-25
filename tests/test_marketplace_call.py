@@ -4556,3 +4556,13 @@ def test_icypeas_profile_url_miss_settles_at_zero():
         assert call_settle._observed_cost_micro(mk, b'{"success":true,"result":null,"status":"NOT_FOUND"}') == 0
         assert call_settle._observed_cost_micro(
             mk, b'{"success":true,"result":"https://www.linkedin.com/in/x","status":"FOUND"}') is None
+
+
+def test_icypeas_company_scrape_bills_the_company_rate():
+    body = {"type": "company", "data": ["https://www.linkedin.com/company/a", "https://www.linkedin.com/company/b"]}
+    mk, estimate, per_row = _priced("icypeas.scrape.bulk", None, body, request_data={"body": body})
+    found = b'{"data":[{"status":"FOUND"},{"status":"FOUND"}]}'
+    assert call_settle._observed_cost_micro(mk, found) == 2 * mk.unit_micro // 2  # 0.5 credit each
+    mk, _, _ = _priced("icypeas.scrape.bulk", None, {**body, "type": "profile"},
+                       request_data={"body": {**body, "type": "profile"}})
+    assert call_settle._observed_cost_micro(mk, found) == 3 * mk.unit_micro  # 1.5 credits each

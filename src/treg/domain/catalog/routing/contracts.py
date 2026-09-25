@@ -125,7 +125,8 @@ def parse_contracts(doc: dict) -> dict[str, Contract]:
                 types.update({k: str(t) for k, t in v.items()})
         scoping = c.get("scoping") or []
         if not isinstance(scoping, list) or any(k not in types for k in scoping):
-            # A typo'd key would silently scope nothing, so a bad row fails the catalog load.
+            # A typo'd key would silently scope nothing; failing the routing load instead makes
+            # every `treg.*` capability disappear, which test_routing notices at once.
             raise ValueError(f"contract {cap}: scoping must list identity keys of the contract, got {scoping!r}")
         out[cap] = Contract(
             capability=cap, summary=str(c.get("summary") or ""), identity=_variants(c.get("identity")),
