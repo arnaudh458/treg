@@ -308,8 +308,8 @@ once treg approves the request it appears in `catalog_search` too, marked `kind:
 relevance like any endpoint (`treg hub ls` shows where the request stands, and a rejection's reason).
 Name the job in recipe.json, `"capability": "people.email.find"` (a capability id from
 `treg catalog search`): once approved, `catalog_get` on any provider of that job lists your tool
-beside them, with a success rate that starts at an estimate and follows real runs. Once listed,
-every new version and every price change waits for treg's review: `treg hub publish` answers
+beside them, with a success rate that starts at an estimate and follows real runs. Once approved,
+every new version and every price change waits for treg's review, also after `treg hub unlist`: `treg hub publish` answers
 `review`, callers keep the approved version, and you can try the new one yourself as `<id>@N`.
 
 **First, check this registry HAS the hub.** It is a per-deployment switch, and it is off by default.

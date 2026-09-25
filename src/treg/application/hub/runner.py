@@ -349,7 +349,8 @@ async def run_hub_tool(
             raise ResolutionFailed("hub_run_failed", status_code=stop.status, detail=_public_detail(detail))
 
         output = refs.resolve(manifest["output"], scope, g.positions)
-        earned = await _close_price(tool, run_id, price_held, success=True)
+        earned = await _close_price(tool, run_id, price_held, success=True,
+                                    actual=0 if _empty_answer(output, list(output)) else None)
         body_out = {
             "run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}", "output": output,
             "usage": {"cost_micro": spent + earned, "steps_micro": spent, "price_micro": earned,
@@ -792,7 +793,11 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
     for i, c in enumerate(charges):
         trace.append({"wave": counted + i, "name": f"charge{i + 1}", "call": c["label"] or "charge",
                       "outcome": "charged", "status": None, "ms": 0, "cost_micro": c["micro"], "key": "team"})
-    earned = await _close_price(tool, run_id, price_held, success=True, actual=min(charged_micro, price_held))
+    # An answer with every declared field empty earns no seller price, whatever the script charged
+    # (hub simulation run 2: a fee was taken for an all-null answer). Its lines stay in the trace.
+    empty = _empty_answer(output, fields)
+    earned = await _close_price(tool, run_id, price_held, success=True,
+                                actual=0 if empty else min(charged_micro, price_held))
     body_out = {"run_id": run_id, "recipe": f"{tool.tool_id}@{tool.version}", "output": output,
                 "usage": {"cost_micro": spent + earned, "steps_micro": spent, "price_micro": earned,
                           **({"charged_micro": charged_micro} if charges else {}),
@@ -804,6 +809,13 @@ async def _run_script_road(parent, tool, inputs, ceiling, maker, catalog, own_to
 
 
 MAX_TEXT = 1_000_000
+
+
+def _empty_answer(output: Any, fields: list[str]) -> bool:
+    """True when every declared output field came back empty: None, "", [], {}."""
+    if not isinstance(output, dict) or not fields:
+        return False
+    return all(output.get(f) in (None, "", [], {}) for f in fields)
 
 
 def _csv_rows(text: str) -> list[dict[str, str]]:

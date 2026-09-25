@@ -437,7 +437,7 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession,
     already print: `endpoint` (with `kind: "hub"`), `provider` (the maker's team). Hides the
     script, the maker's tools and every key (docs/HUB-DECISIONS.md round 4 q4, round 5 q7)."""
     from ..application import hub as hub_app
-    from ..domain.hub import price_label as hub_price_label
+    from ..domain.hub import PAY_NOTE as HUB_PAY_NOTE, fees_label as hub_fees_label, price_label as hub_price_label
     from ..models import Org
     if not hub_app.enabled() or not hub_app.is_hub_id_shape(endpoint_id):
         return None
@@ -477,9 +477,11 @@ async def _hub_endpoint_view(endpoint_id: str, db: AsyncSession,
             "limits": m.get("limits", {}),
             "cost": {"type": "per_success", "usd": hub_app.worst_usd(m, row.price_micro, rng), "currency": "USD",
                      "unit": "run", "note": "the most a successful run has cost recently, provider fees and the maker's price together (`price_range` is the observed low–high); the maker's own price is `price_line`"},
-            "price_line": "seller " + hub_price_label(m) + " + provider fees",
+            "price_line": "seller " + hub_price_label(m) + hub_fees_label(m),
+            "pay_note": HUB_PAY_NOTE,
             **hub_app.with_range(m, rng),
             "made_of": len(m.get("uses", [])),
+            "sends_inputs_to": await hub_app.own_hosts(db, row),
             "status": row.status,
             "health": health.state, "fails_in_a_row": health.fails_in_a_row,
             "check": {"status": (row.check_result or {}).get("status"),

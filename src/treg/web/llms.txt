@@ -470,7 +470,7 @@ and `200` when it is on.
   capability id) puts the approved tool beside that job's providers in `catalog_get`, its success
   rate an estimate (`observed.estimated`) until about 20 runs by other teams; once listed, every new
   version (status `review`) and every price change waits for treg's review while the approved one
-  keeps serving; `treg hub unlist` takes it out; `treg hub log <id>
+  keeps serving, also after `treg hub unlist` (it only takes the tool out of search); `treg hub log <id>
   --public off` hides the run log on the share page. The page's log shows the last 20 runs and runs
   per day: time, outcome, ms, steps, units, price paid — never who called, never inputs or output.
 - Versions: the newest live one serves; `<id>@N` pins one for 30 days after a newer lands.

@@ -12,12 +12,19 @@ from .. import adsconv, analytics, health, sandbox as demo_sandbox
 from ..config import get_settings
 from ..domain import money as ledger
 from ..domain import referrals
-from ..domain.governance.teams import _make_org_membership, _slugify
+from ..domain.governance.teams import _make_org_membership, _slugify, reserved_reason
 from ..domain.identity.access import _email_domain, _is_blocked_email, _is_machine_email, _norm_email
 from ..domain.identity.promotions import claim_signup_promo
 from ..infra.db import session_maker
 from ..models import Org, User
 from ..timeutil import utcnow_naive as _utcnow_naive
+
+
+def reserved_team_names() -> frozenset[str]:
+    """Every catalog provider and platform slug: no team may take one as its name."""
+    from ..domain.catalog import store as catalog_store
+    cat = catalog_store.load()
+    return frozenset({e["provider"] for e in cat.endpoints} | set(getattr(cat, "platforms", {}) or {}))
 
 
 class SignupError(Exception):
@@ -213,8 +220,10 @@ async def register_user(
         user = User(email=email)
         db.add(user)
         await db.flush()
+        # The default team is named after the email; one that reads as reserved gets a plain slug.
+        base = _slugify(email) if not reserved_reason(email, reserved_team_names()) else f"team-{user.id}"
         org, token = await _make_org_membership(
-            db, user, name=email, slug_base=_slugify(email), role="owner", webhook_url=webhook_url,
+            db, user, name=email, slug_base=base, role="owner", webhook_url=webhook_url,
         )
         click_field, gclid, landing = _ad_attribution_from(ad_cookie)
         if gclid:
@@ -255,6 +264,8 @@ async def create_org(
         # Previously registered identities may still hold tokens, so check this door too.
         if blocked_email(user.email, "create_org"):
             raise SignupError("blocked_domain")
+        if not user.is_superadmin and reserved_reason(name, reserved_team_names()):
+            raise SignupError("reserved_name")
         click_field, gclid, landing = _ad_attribution_from(ad_cookie)
         # A browser sign-in reaches this door instead of /users, so both doors must read attribution.
         for _ in range(3):  # a concurrent create can claim the slug before commit; retry a fresh lookup

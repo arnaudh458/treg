@@ -37,7 +37,7 @@ hubPricePrompt(t){ return 'Change the price of my treg hub tool '+t.tool_id+' (n
 async setHubFlag(field, value){ if(!this.hub.tool) return; this.hub.flagSaving=true; this.hub.err='';
   try{ const d=await this.api('/hub/tools/'+encodeURIComponent(this.hub.tool.tool_id), {method:'PATCH', headers:{'content-type':'application/json'}, body:JSON.stringify({[field]:!!value})});
        this.hub.tool={...this.hub.tool, ...(field==='listed'?{listed:d.listed, listing:d.listing}:{[field]:d[field]})}; await this.loadHub();
-       this.hub.note=field==='listed'?(value?this.hubListingWords({listing:d.listing}):'Unlisted: callable by id and share link only.')
+       this.hub.note=field==='listed'?this.hubListingWords({listing:d.listing})
                                      :(d.public_log?'Public run log on.':'Public run log off.');
        setTimeout(()=>{ this.hub.note=''; }, 2500); }
   catch(e){ this.hub.err=this.hubErr(e); await this.loadHub(); }
@@ -59,7 +59,8 @@ async openRun(id, fromPop){ this.resetConfirms(); this.detail=null; this.view='r
 // api() throws Error('http') with .status and .detail: say the detail, or a plain sentence per status
 hubListing(t){ return ((t&&t.listing)||{}).state||'none'; },
 hubListingWords(t){ return {none:'Not in search.', requested:'Requested: it appears in search once treg approves it.',
-  approved:'Approved: it is in catalog search.', rejected:'Rejected: not in search.'}[this.hubListing(t)]; },
+  approved:'Approved: it is in catalog search.', rejected:'Rejected: not in search.',
+  unlisted:'Unlisted: out of search. Callers who have the id keep the approved version, and every change still waits for review.'}[this.hubListing(t)]; },
 hubErr(e, on404){ if(e&&e.status===404&&on404) return on404; if(e&&e.status===401) return 'Sign in to see this.';
   const d=e&&e.detail; if(d&&typeof d==='object') return (d.error?d.error+': ':'')+(d.message||d.rule||JSON.stringify(d)); return d||String((e&&e.message)||e); },
 fmtMs(ms){ return ms>=1000 ? (ms/1000).toFixed(1)+' s' : (ms||0)+' ms'; },

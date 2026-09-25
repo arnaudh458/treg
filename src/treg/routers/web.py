@@ -2266,18 +2266,19 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
     example = {k: v.get("example", v.get("default")) for k, v in inputs.items() if "example" in v or "default" in v}
     example = {k: v for k, v in example.items() if v not in ("", None, 0)}
     example_json = json.dumps(example)
-    from ..domain.hub import price_label as hub_price_label, stored_pricing
+    from ..domain.hub import PAY_NOTE as HUB_PAY_NOTE, fees_label as hub_fees_label, price_label as hub_price_label, stored_pricing
     pricing = stored_pricing({"price_usd": row.price_micro / 1_000_000, **m})
+    hosts = await hub_app.own_hosts(db, row)
     raw_rng = (await hub_app.price_ranges(db, {row.tool_id: m})).get(row.tool_id)
     price_usd = hub_app.worst_usd(m, row.price_micro, raw_rng) or 0.0             # the most a run has cost, for the Offer
     label = hub_price_label(m)
     fees = any("." in u for u in m.get("uses", []))
     if pricing["mode"] == "charge":
-        price_line = f"seller {label}" + (" + provider fees" if fees else "")
+        price_line = f"seller {label}" + hub_fees_label(m)
         per_k = "the script sets each run's price, never above the cap"
     else:
         p_usd = pricing["price_usd"]
-        price_line = (f"seller ${p_usd:.6g} + provider fees" if p_usd else "free + provider fees") if fees else (f"seller ${p_usd:.6g}" if p_usd else "free")
+        price_line = (f"seller ${p_usd:.6g}" if p_usd else "free") + hub_fees_label(m)
         per_k = f"${p_usd * 1000:,.2f} per 1,000 runs" if p_usd else "no seller price"
     rng = hub_app.with_range(m, raw_rng)
     price_range = rng["price_range"]
@@ -2299,7 +2300,7 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
                    else "healthy" if chk.get("status") == "passed" and row.status == "live" else row.status)
     if as_md:
         md = [f"# {row.name}", "", f"`{row.tool_id}` · a hub tool by **{maker}** · v{row.version} · {row.status}", "",
-              row.summary, "", f"**Price:** {price_range} — {range_note}. {price_line} ({per_k}); per successful run, you pay only what completes.", "",
+              row.summary, "", f"**Price:** {price_range} — {range_note}. {price_line} ({per_k}); {HUB_PAY_NOTE}.", "",
               "## Call it", "", "```", f"treg call {row.tool_id} --data '{example_json}'", "",
               f"POST {base}/call/{row.tool_id}    X-Treg-Token · Content-Type: application/json · body {example_json}", "```", "",
               f"Your agent: `catalog_get(\"{row.tool_id}\")` then `call`. Needs a treg token and balance.", "",
@@ -2312,7 +2313,8 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
                "## Health", "", f"{health_word} · check {chk.get('status') or '-'}{(' at ' + checked_at) if checked_at else ''} · "
                f"{rel['runs']} runs by others in 30 days" + (f", {rel['ok_pct']}% ok, {rel['median_ms']} ms median" if rel["runs"] else ""), "",
                "## Made of", "", f"made of {len(m.get('uses', []))} tool(s) (catalog tools and the maker's own; names and keys hidden) · {kind} · "
-               f"{caps.get('wall_s', 120)} s · {caps.get('steps', 20)} calls max", ""]
+               + (f"sends your inputs to the maker's own server at {', '.join(hosts)} · " if hosts else "")
+               + f"{caps.get('wall_s', 120)} s · {caps.get('steps', 20)} calls max", ""]
         if runlog is not None:
             md += [f"## Recent runs (30 days: {runlog['total']} runs, {runlog['ok']} ok, {runlog['failed']} failed)", "",
                    "| when | outcome | ms | steps | units | price_usd |", "|---|---|---|---|---|---|"]
@@ -2348,7 +2350,7 @@ async def hub_page(request: Request, tool_id: str, db: AsyncSession = Depends(ge
   <div class="pricecard">
     <div class="big">{e(price_range)}</div>
     <div class="muted" style="font-size:12px">{e(range_note)}</div>
-    <div class="muted" style="font-size:12px">{e(price_line)} · {e(per_k)} · you pay only what completes</div>
+    <div class="muted" style="font-size:12px">{e(price_line)} · {e(per_k)} · {e(HUB_PAY_NOTE)}</div>
     <div style="margin-top:8px;font-size:13px">{e(health_word)}{(' · checked ' + e(checked_at)) if checked_at else ''}</div>
   </div>
 
@@ -2377,6 +2379,7 @@ curl -X POST {e(base)}/call/{e(row.tool_id)} \\
   <h2>Made of</h2>
   <ul class="facts">
     <li>made of {len(m.get('uses', []))} tool(s) <span class="muted">(catalog tools and the maker's own; names and keys hidden)</span></li>
+    {f'<li>sends your inputs to the maker&#39;s own server at <b>{e(", ".join(hosts))}</b>; what answers there can change without a new version</li>' if hosts else ''}
     <li>{e(kind)} · {caps.get('wall_s', 120)} s · {caps.get('steps', 20)} calls max</li>
     {('<li>data uploaded with the tool: ' + str(max(0, row.data.count(chr(10)) + (0 if row.data.endswith(chr(10)) else 1) - 1)) + ' rows</li>') if getattr(row, 'data', None) else ''}
     <li>Reliability, 30 days: {rel['runs']} runs by others{(' · ' + str(rel['ok_pct']) + '% ok · ' + str(rel['median_ms']) + ' ms median') if rel['runs'] else ''}</li>

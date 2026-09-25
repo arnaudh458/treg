@@ -75,6 +75,28 @@ This replaces round 2's "an approval stays across new versions".
 **3. A rejection keeps the approved version,** marks the new one `rejected`, drops the new price,
 and gives the maker the reason.
 
-**4. Unlisted tools stay self-serve.** A tool nobody can find publishes and prices without review;
-unlisting releases whatever was waiting.
+**4. Unlisted tools stay self-serve.** A tool nobody can find publishes and prices without review.
+(Round 5 changes this for a tool treg has approved once: it stays under review after unlisting.)
+
+## Round 5 — what a cheating seller found (2026-09-25, owner, after hub simulation run 2)
+
+A simulated seller tried 14 ways to change what buyers get or pay. Decided:
+
+**1. Once approved, always reviewed.** Approve, unlist, then change the price and the versions
+was a way round the review: buyers who kept the id paid up to 50 times more for less. Now unlisting
+an approved tool only takes it out of search; its changes still wait, callers keep the approved
+version, and listing it again needs no new review. A rejection that takes an approval back keeps
+the review too.
+
+**2. Reserved team names.** A team slug is the first half of every hub tool id. Names that read as
+treg, as official, or as a catalog provider or platform are refused, for creating, renaming and
+publishing, unless a superadmin acts.
+
+**3. An empty answer pays no seller price**, and the price line names the provider-fee limit and
+says plainly that a failed run still pays the fees of the steps that ran.
+
+**4. The public price rests on other teams' runs** once there are any; the maker's own free runs
+are marked as tests. **5. The contract names the maker's own server hosts** a tool sends inputs to.
+
+Not decided: re-reviewing a tool when the maker's own server changes; the maker is only disclosed.
 

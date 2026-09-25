@@ -9,7 +9,7 @@ so a listing outlives a version. Expand only: `hubtool.listed` stays in the tabl
 revision on (the hub was off in production, so no tool was listed there), for a later contract
 revision to drop. `capability` is the catalog job treg approved with the listing (round 3); `pending_version`,
 `pending_pricing` and `update_reason` hold an update to an approved tool while it waits for review
-(round 4).
+(round 4); `reviewed` marks a tool treg approved once, which stays under review for good.
 """
 from collections.abc import Sequence
 
@@ -37,6 +37,7 @@ def upgrade() -> None:
         sa.Column("pending_version", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("pending_pricing", sa.JSON(), nullable=True),
         sa.Column("update_reason", sa.String(), nullable=False, server_default=""),
+        sa.Column("reviewed", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.create_index("ix_hublisting_org_id", "hublisting", ["org_id"])
     op.create_index("ix_hublisting_state", "hublisting", ["state"])

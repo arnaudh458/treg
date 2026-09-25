@@ -515,7 +515,10 @@ approved, `treg catalog get` on any provider of that job shows your tool beside 
 success rate starts at 90%, counted as 5 runs, and real runs by other teams replace that estimate.
 Once a tool is listed, every new version and every `treg hub price` waits for treg's review: the
 publish answers `review`, callers keep the approved version and price, and you can call the new
-version yourself as `<id>@N`. A rejected update keeps the approved one and tells you why. Unlisted,
+version yourself as `<id>@N`. A rejected update keeps the approved one and tells you why. This
+stays true after `unlist`: once treg has approved a tool, it stays under review, and `list` puts it
+back in search with no new review. A team name that reads as treg, as official, or as a catalog
+provider cannot publish. An answer with every output field empty pays no seller price. Unlisted,
 unapproved, failed and retired tools never appear. The share page's run log shows the last 20 runs and runs per
 day for 30 days: time, outcome, duration, steps, units and the price paid, and never who called,
 the inputs, or the output. The dashboard has the same two switches under Hub → a tool → Listing.

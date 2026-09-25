@@ -4005,9 +4005,16 @@ def cmd_balance(args, cfg) -> None:
     blocks = b.get("blocks") or []
     if blocks:
         print(f"\n  {_M}credit{_R}")
+        # Earned credit arrives as one small block per sale; one line says the total (run 2).
+        earned = [blk for blk in blocks if blk["kind"] == "earned"]
         for blk in blocks:
+            if blk["kind"] == "earned" and len(earned) > 1:
+                continue
             print(f"    {blk['kind']:<12} {_usd(blk['remaining_micro']):>10} left  "
                   f"{_M}of {_usd(blk['amount_micro'])} granted {(blk.get('created_at') or '')[:10]}{_R}")
+        if len(earned) > 1:
+            print(f"    {'earned':<12} {_usd(sum(x['remaining_micro'] for x in earned)):>10} left  "
+                  f"{_M}of {_usd(sum(x['amount_micro'] for x in earned))} from {len(earned)} sales{_R}")
     holds = b.get("holds") or []
     if holds:  # money withheld for calls still in flight — it is NOT spent yet
         print(f"\n  {_M}in flight (held){_R}")
@@ -4204,6 +4211,9 @@ def cmd_org_create(args, cfg) -> None:
         d = r.json()
         cfg.update(token=d["token"], active_org=d["org"], identity=True)
         _save_config(cfg)
+        if not _JSON_OVERRIDE:
+            # Found in hub simulation run 2: the switch was silent, and a publish went to the wrong team.
+            print(f"  {_M}active team is now{_R} {d['org']}   {_M}(switch back: treg org use <slug>){_R}", file=sys.stderr)
     _show(r)
 
 
@@ -5355,6 +5365,8 @@ def _hub_report(r, *, json_out: bool, example: str = "{}") -> None:
         _kv("tool", f"{_B}{payload.get('tool_id')}{_R}  version {payload.get('version')}  {_G if live else _AM}{payload.get('status')}{_R}")
         if review and payload.get("message"):
             _arrow(payload["message"])
+        if payload.get("price_note"):
+            _arrow(payload["price_note"])
         if chk:
             if chk.get("status") == "passed":
                 _ok(f"check passed   run {chk.get('run_id')}   charged {chk.get('charged_micro', 0)} µ$ to your balance")
@@ -5488,6 +5500,7 @@ _LISTING_WORDS = {
     "requested": "requested — it appears in catalog search once treg approves it",
     "approved": "approved — it is in catalog search (treg catalog search, catalog_search)",
     "rejected": "rejected — not in search",
+    "unlisted": "unlisted — out of search; callers by id keep the approved version, and changes still wait for review",
 }
 
 
@@ -5503,8 +5516,8 @@ def cmd_hub_list(args, cfg) -> None:
     _section("Listing")
     _kv("tool", f"{d['tool_id']}  v{d['version']}")
     _kv("search", _LISTING_WORDS.get(lst["state"], lst["state"]))
-    if lst.get("reason"):
-        _kv("reason", lst["reason"])
+    if lst.get("reason") and lst["state"] in ("rejected", "requested"):
+        _kv("reason", ("last rejected: " if lst["state"] == "requested" else "") + lst["reason"])
 
 
 def cmd_hub_unlist(args, cfg) -> None:
@@ -5562,12 +5575,20 @@ def cmd_hub_ls(args, cfg) -> None:
         search = ""
         if is_serving:
             lst = t.get("listing") or {"state": "none"}
-            search = {"none": "no", "requested": "requested", "approved": "yes", "rejected": "rejected"}.get(lst["state"], lst["state"])
+            search = {"none": "no", "requested": "requested", "approved": "yes", "rejected": "rejected",
+                      "unlisted": "unlisted"}.get(lst["state"], lst["state"])
             upd = lst.get("update") or {}
             if upd.get("state") == "pending":
                 search += " · update waits"
         status = t["status"] + (" ◀" if is_serving else "")
         print(f"  {t['tool_id']:<40}{t['version']:>3}  {colour}{status:<11}{_R}{t['kind']:<7}{price[:21]:<22}{search:<20}{', '.join(t['uses'])[:30]}")
+        if is_serving:
+            lst = t.get("listing") or {}
+            upd = lst.get("update") or {}
+            if lst.get("reason") and lst.get("state") in ("rejected", "requested"):
+                _dim(f"      {'rejected' if lst['state'] == 'rejected' else 'last rejected'}: {lst['reason']}")
+            if upd.get("state") == "rejected" and upd.get("reason"):
+                _dim(f"      update rejected: {upd['reason']}")
     _dim("  ◀ the version callers get. `treg hub list <id>` asks for search; treg reviews each request and update.")
 
 
@@ -6669,8 +6690,10 @@ def build_parser() -> argparse.ArgumentParser:
     h_earn.add_argument("--days", type=int, default=90)
     h_earn.add_argument("--csv", action="store_true", help="print CSV instead of the table")
     h_earn.set_defaults(fn=cmd_hub_earnings)
-    h_price = mk(hs, "price", "Change a tool's price for later runs, no version bump: a JSON recipe's fixed price per run, "
-                 "or a script's max_price_usd (the cap on its ctx.charge lines).",
+    h_price = mk(hs, "price", "Change a tool's price for later runs, no version bump: a JSON recipe's fixed price per run. "
+                 "On a SCRIPT it sets only max_price_usd, the cap: what you earn is the ctx.charge lines in "
+                 "run.js, so to raise it edit run.js and publish a new version. On a tool treg approved, "
+                 "the new price waits for review. The next `treg hub publish` uses recipe.json's price again.",
                  "treg hub price acme.leads-db 0.02", "treg hub price acme.leads-db 0   # free (a JSON recipe)")
     h_price.add_argument("tool_id"); h_price.add_argument("price_usd", type=float)
     h_price.set_defaults(fn=cmd_hub_price)

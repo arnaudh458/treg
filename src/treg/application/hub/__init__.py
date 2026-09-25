@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import get_settings
 from ...domain.catalog import store as catalog_store
-from ...domain.hub import (ManifestError, price_label, seeded_observed, stored_pricing, validate, validate_check,
+from ...domain.hub import (ManifestError, fees_label, price_label, seeded_observed, stored_pricing, validate, validate_check,
                            validate_readme)
 from ...models import HubListing, HubTool, Org, Tool
 
@@ -246,15 +246,20 @@ async def price_ranges(db: AsyncSession, tools: dict[str, dict[str, Any]], *, da
                 *recent, own, HubRun.tool_id.in_(scripts)))).all():
             charged[rid] = sum(int(e.get("cost_micro") or 0) for e in (trace or [])
                                if isinstance(e, dict) and e.get("outcome") == "charged")
-    out: dict[str, dict[str, Any]] = {}
+    # Runs by other teams decide the number once there are any; before that the maker's own runs and
+    # checks stand in, marked `from_tests` (hub simulation run 2: free own runs shaped the figure).
+    buckets: dict[str, dict[bool, dict[str, Any]]] = {}
     for rid, tid, cost, price, is_own in (await db.execute(
             select(HubRun.id, HubRun.tool_id, HubRun.cost_micro, HubRun.price_micro, own)
             .where(*recent))).all():
         total = int(cost or 0) + seller_part_micro(tools[tid], None if is_own else int(price or 0),
                                                    charged.get(rid, 0))
-        r = out.setdefault(tid, {"low_micro": total, "high_micro": total, "samples": 0})
+        r = buckets.setdefault(tid, {}).setdefault(bool(is_own), {"low_micro": total, "high_micro": total, "samples": 0})
         r["low_micro"], r["high_micro"] = min(r["low_micro"], total), max(r["high_micro"], total)
         r["samples"] += 1
+    out: dict[str, dict[str, Any]] = {}
+    for tid, b in buckets.items():
+        out[tid] = b[False] if False in b else {**b[True], "from_tests": True}
     return out
 
 
@@ -265,7 +270,10 @@ def with_range(manifest: dict[str, Any], rng: dict[str, Any] | None) -> dict[str
     alone."""
     from ...domain.hub import range_label
     rng = rng or {}
-    return {"price_range": range_label(manifest, rng.get("low_micro"), rng.get("high_micro")),
+    label = range_label(manifest, rng.get("low_micro"), rng.get("high_micro"))
+    if rng.get("from_tests"):
+        label += " (from the maker's own tests)"
+    return {"price_range": label, "price_from_tests": bool(rng.get("from_tests")),
             "price_samples": int(rng.get("samples", 0)),
             "price_low_micro": rng.get("low_micro"), "price_high_micro": rng.get("high_micro")}
 
@@ -281,8 +289,8 @@ def worst_usd(manifest: dict[str, Any], price_micro: int, rng: dict[str, Any] | 
 
 def listing_view(listing: HubListing | None) -> dict[str, Any]:
     """The tool's place in search, for the maker: `listed` is true only once treg approved it;
-    `listing` says where the request stands (none | requested | approved | rejected, with the
-    admin's reason on a rejection)."""
+    `listing` says where the request stands (none | requested | approved | rejected | unlisted).
+    `reason` is the admin's last rejection reason; it stays while the maker asks again."""
     if listing is None:
         return {"listed": False, "listing": {"state": "none"}}
     update = None
@@ -292,7 +300,7 @@ def listing_view(listing: HubListing | None) -> dict[str, Any]:
                   "reason": listing.update_reason}
     return {"listed": listing.state == "approved",
             "listing": {"state": listing.state, "reason": listing.reason, "capability": listing.capability,
-                        "update": update,
+                        "update": update, "reviewed": bool(listing.reviewed),
                         "requested_at": listing.requested_at.isoformat(),
                         "decided_at": listing.decided_at.isoformat() if listing.decided_at else None}}
 
@@ -364,8 +372,9 @@ async def set_price(db: AsyncSession, *, org_id: int, tool_id: str, price_usd: f
     if row is None:
         return None
     lst = await db.get(HubListing, tool_id)
-    if lst is not None and lst.state == "approved":
-        # A listed tool's price is public: the new one waits for review (round 4); check it now so
+    if lst is not None and lst.reviewed:
+        # A reviewed tool's price is public: the new one waits for review (round 4), also after the
+        # maker unlisted it (run 2: unlisting was a way round the review); check it now so
         # the maker hears a bad number at once, not from the reviewer.
         if row.kind == "script":
             hub_manifest._money_micro("max_price_usd", price_usd, allow_zero=False)
@@ -442,7 +451,7 @@ async def search_listed(db: AsyncSession, query: str, cat: Any) -> tuple[list[tu
             "platform": "", "tier": "core", "verified": True,
             "method": "POST", "path": f"/call/{tid}", "writes": r.writes,
             "cost": {"type": "per_success", "usd": worst, "currency": "USD", "unit": "run"},
-            "price_line": "seller " + price_label(m) + " + provider fees", "price_label": price_label(m),
+            "price_line": "seller " + price_label(m) + fees_label(m), "price_label": price_label(m),
             **with_range(m, ranges.get(tid)),
             "made_of": len(m.get("uses", [])),
         }
@@ -472,13 +481,22 @@ async def set_flags(db: AsyncSession, *, org_id: int, tool_id: str, maker_email:
         from ...timeutil import utcnow_naive
         current = await db.get(HubListing, tool_id)
         if not listed:
-            if current is not None:
-                await _release_update(db, current)       # no longer public: no longer reviewed
-                await db.delete(current)
+            if current is not None and current.reviewed:
+                # Hidden from search, still reviewed: callers by id keep the approved version and
+                # price, and every later change still waits (hub simulation run 2).
+                if current.state == "approved":
+                    current.state = "unlisted"
+                    db.add(current)
+            elif current is not None:
+                await db.delete(current)                 # a request never approved: withdrawn
         elif current is None:
             db.add(HubListing(tool_id=tool_id, org_id=org_id, state="requested", requested_by=maker_email))
+        elif current.state == "unlisted":
+            current.state = "approved"                   # the tool did not change unreviewed: back at once
+            db.add(current)
         elif current.state == "rejected":
-            current.state, current.reason, current.requested_by = "requested", "", maker_email
+            # Asking again keeps the last reason, so the maker can still read what to fix.
+            current.state, current.requested_by = "requested", maker_email
             current.requested_at, current.decided_by, current.decided_at = utcnow_naive(), "", None
             db.add(current)
     if public_log is not None:
@@ -531,10 +549,9 @@ async def decide_listing(db: AsyncSession, *, tool_id: str, approve: bool, reaso
             capability = (tool.manifest.get("capability") or "") if tool else ""
         if capability and capability not in catalog_store.load().capabilities:
             raise ManifestError("capability", f"{capability!r} is not a catalog capability")
-        lst.capability = capability
+        lst.capability, lst.reviewed = capability, True
     else:
-        lst.capability = ""
-        await _release_update(db, lst)                   # out of search: its update needs no review
+        lst.capability = ""                              # a reviewed tool's waiting update stays waiting
     lst.state, lst.reason = ("approved", "") if approve else ("rejected", reason.strip()[:500])
     lst.decided_by, lst.decided_at = admin_email, utcnow_naive()
     db.add(lst)
@@ -583,7 +600,7 @@ async def capability_siblings(db: AsyncSession, capability: str, *, exclude: str
                     "path": f"/call/{tid}",
                     "cost": {"type": "per_success", "usd": worst_usd(r.manifest, r.price_micro, ranges.get(tid)),
                              "currency": "USD", "unit": "run"},
-                    "price_line": "seller " + price_label(r.manifest) + " + provider fees",
+                    "price_line": "seller " + price_label(r.manifest) + fees_label(r.manifest),
                     **with_range(r.manifest, ranges.get(tid)),
                     "observed": seeded_observed(ok, runs)})
     return out
@@ -599,10 +616,10 @@ async def approved_capability(db: AsyncSession, tool_id: str) -> str:
 # and a price change. The approved version and price keep serving until treg decides.
 
 async def _hold_for_review(db: AsyncSession, row: HubTool) -> None:
-    """A version that passed its check becomes `review` instead of `live` when its tool is approved
-    for search. A newer one replaces an older one still waiting (`superseded`)."""
+    """A version that passed its check becomes `review` instead of `live` when treg has ever approved
+    its tool (listed, unlisted or taken back). A newer one replaces an older one still waiting (`superseded`)."""
     lst = await db.get(HubListing, row.tool_id)
-    if lst is None or lst.state != "approved":
+    if lst is None or not lst.reviewed:
         return
     if lst.pending_version and lst.pending_version != row.version:
         old = (await db.execute(select(HubTool).where(HubTool.tool_id == row.tool_id,
@@ -616,8 +633,7 @@ async def _hold_for_review(db: AsyncSession, row: HubTool) -> None:
 
 
 async def _release_update(db: AsyncSession, lst: HubListing) -> None:
-    """The tool left search (unlisted, or its listing rejected): what waited needs no review. The
-    waiting version goes live and the waiting price applies, as for any unlisted tool."""
+    """An approved update: the waiting version goes live and the waiting price applies."""
     if lst.pending_version:
         row = (await db.execute(select(HubTool).where(HubTool.tool_id == lst.tool_id,
                                                       HubTool.version == lst.pending_version))).scalars().first()
@@ -637,7 +653,7 @@ async def _release_update(db: AsyncSession, lst: HubListing) -> None:
 async def pending_updates(db: AsyncSession) -> list[dict[str, Any]]:
     """The review queue of updates: every approved tool with a version or a price waiting, each with
     what serves now beside what would replace it, so the reviewer reads the change."""
-    rows = (await db.execute(select(HubListing).where(HubListing.state == "approved")
+    rows = (await db.execute(select(HubListing).where(HubListing.reviewed == True)  # noqa: E712
                              .order_by(HubListing.tool_id))).scalars().all()
 
     def side(t: HubTool | None) -> dict[str, Any] | None:
@@ -681,4 +697,15 @@ async def decide_update(db: AsyncSession, *, tool_id: str, approve: bool, reason
         lst.pending_version, lst.pending_pricing, lst.update_reason = 0, None, reason.strip()[:500]
         db.add(lst)
     return lst
+
+
+async def own_hosts(db: AsyncSession, row: HubTool) -> list[str]:
+    """The hosts of the maker's own tools this version calls: a caller's inputs can reach them, and
+    the maker can change what answers there without a new version (hub simulation run 2). Shown on
+    the public contract, host only."""
+    names = [u for u in row.manifest.get("uses", []) if "." not in u]
+    if not names:
+        return []
+    hosts = (await db.execute(select(Tool.host).where(Tool.org_id == row.org_id, Tool.name.in_(names)))).scalars().all()
+    return sorted({h for h in hosts if h})
 

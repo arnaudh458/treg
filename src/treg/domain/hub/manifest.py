@@ -435,6 +435,21 @@ def price_label(manifest: dict[str, Any]) -> str:
     return f"${p['price_usd']:.6g} a run" if p["price_usd"] else "free"
 
 
+def fees_label(manifest: dict[str, Any]) -> str:
+    """The provider-fee half of a hub tool's price line, with its limit: "+ provider fees up to $1 a
+    run" (the tool's `limits.cost_usd`, else the runner's $1.00 default; a caller's
+    X-Treg-Run-Max-Cost lowers it). Empty when the tool calls only its maker's own tools. Found in
+    hub simulation run 2: a maker set the limit to $100 and buyers read only "+ provider fees"."""
+    if not any("." in u for u in manifest.get("uses", [])):
+        return ""
+    cap = (manifest.get("limits") or {}).get("cost_usd") or 1.0
+    return f" + provider fees up to ${float(cap):.6g} a run"
+
+
+PAY_NOTE = ("a failed run pays no seller price; the provider fees of the steps that ran are still "
+            "charged, and an empty answer pays no seller price")
+
+
 def seller_part_micro(manifest: dict[str, Any], observed_price_micro: int | None, charged_micro: int = 0) -> int:
     """What the seller earns on one run, for the price range: the observed price when a caller
     paid one (a run by another team), else what a caller would have paid (the maker's own runs and

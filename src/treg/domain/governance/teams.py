@@ -89,11 +89,30 @@ MAX_ORG_NAME = 80
 SLUG_LEN = (3, 40)
 
 
-async def rename_org(db: AsyncSession, org: Org, *, name: str | None = None, slug: str | None = None) -> None:
+def reserved_reason(text: str, extra: frozenset[str] | set[str] = frozenset()) -> str | None:
+    """Why a team name or slug is reserved, or None. A team's slug is the first half of every hub
+    tool id it publishes (`<slug>.<name>`) and the "by <team>" on its pages, so a name that reads as
+    treg itself, as an official source, or as a catalog provider or platform (`extra`, from the
+    catalog) would let a stranger's tool pass for ours or theirs (hub simulation run 2: a team
+    `treg` published `treg.companies-enrich`). Superadmins may still use one."""
+    s = _slugify(text or "")
+    if s == "treg" or s.startswith("treg-") or "official" in s:
+        return f"{text!r} is reserved: names that read as treg itself or as official are kept for treg"
+    if s in extra:
+        return f"{text!r} is reserved: it is the name of a provider or platform in the treg catalog"
+    return None
+
+
+async def rename_org(db: AsyncSession, org: Org, *, name: str | None = None, slug: str | None = None,
+                     reserved: frozenset[str] | set[str] = frozenset(), allow_reserved: bool = False) -> None:
     """Change a team's display name and/or slug. Caller commits.
 
     A slug change retires the old slug into ``previous_slug`` so credentials pinned to it keep
     working. Raises ValueError with a user-facing message on bad input or a taken slug."""
+    if not allow_reserved:
+        for text in (name, slug):
+            if text and (why := reserved_reason(text, reserved)):
+                raise ValueError(why)
     if name is not None:
         name = name.strip()
         if not name:

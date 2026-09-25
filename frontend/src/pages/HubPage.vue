@@ -112,6 +112,7 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
                 <p class="sub" style="margin:4px 0;max-width:70ch">
                   <b :class="{ok:hubListing(hub.tool)==='approved', warn:hubListing(hub.tool)==='rejected'}">{{hubListingWords(hub.tool)}}</b>
                   <template v-if="hubListing(hub.tool)==='rejected' && hub.tool.listing.reason"> Reason: {{hub.tool.listing.reason}}</template>
+                  <template v-if="hubListing(hub.tool)==='requested' && hub.tool.listing.reason"> Last rejected: {{hub.tool.listing.reason}}</template>
                 </p>
                 <p class="sub" style="margin:4px 0;max-width:70ch">
                   <template v-if="hubListing(hub.tool)==='approved' && hub.tool.listing.capability">Beside the catalog providers of <code>{{hub.tool.listing.capability}}</code>: <code>catalog_get</code> on any of them shows your tool, with its success rate.</template>
@@ -124,7 +125,7 @@ POST {{proxy}}/call/{{hub.tool.tool_id}}    X-Treg-Token · JSON body of inputs<
                     <template v-if="hub.tool.listing.update.pricing"> the price ${{hub.tool.listing.update.pricing.price_usd}}</template>. Callers keep the approved one until then.</template>
                   <template v-else><b class="warn">Your last update was rejected:</b> {{hub.tool.listing.update.reason}}{{/[.!?]$/.test(hub.tool.listing.update.reason)?'':'.'}} The approved version still serves.</template>
                 </p>
-                <button v-if="['none','rejected'].includes(hubListing(hub.tool))" class="btn sm primary" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @click="setHubFlag('listed',true)">{{hubListing(hub.tool)==='rejected'?'Ask again':'Ask to list it'}}</button>
+                <button v-if="['none','rejected','unlisted'].includes(hubListing(hub.tool))" class="btn sm primary" :disabled="hub.flagSaving||!canRegister||hub.tool.status!=='live'" @click="setHubFlag('listed',true)">{{hubListing(hub.tool)==='rejected'?'Ask again':hubListing(hub.tool)==='unlisted'?'List it again':'Ask to list it'}}</button>
                 <button v-else class="btn sm" :disabled="hub.flagSaving||!canRegister" @click="setHubFlag('listed',false)">{{hubListing(hub.tool)==='approved'?'Unlist':'Withdraw the request'}}</button>
                 <p class="sub" style="margin:6px 0 0;max-width:70ch">Listed: it appears in catalog search and <code>catalog_search</code>, marked as a hub tool by your team, ranked by relevance with no boost. treg reviews each request, and each later version or price change. Not listed: only someone with the id or the share link can call it.</p>
               </div>

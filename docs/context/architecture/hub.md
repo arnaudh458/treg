@@ -286,7 +286,7 @@ bump; a script's amounts change only with a new version of run.js.
   inputs, output, the price line (`price_range` leads: what recent successful runs cost, steps
   and seller price together, and for a script the seller cap after it ("$0.0103/run so far · seller up to
   $0.02 a run": recent runs may all have charged little), from `application/hub.price_ranges` over 30 days of every successful
-  run, checks included, with `price_samples`; before any run the declared worst case plus
+  run, runs by other teams only once there are any (else the maker's own, marked), with `price_samples`; before any run the declared worst case plus
   "+ steps"; then `price_label`: the mode and the worst case; `cost.usd` is the
   worst case), health, version, `call_template`, the page URL, the readme);
   never the script, the maker's tools or a key. Search lists a hub tool only when treg approved its
@@ -323,9 +323,28 @@ bump; a script's amounts change only with a new version of run.js.
   (`pending_updates`: what serves now beside what would replace it); `POST
   /admin/hub/updates/{id} {decision, reason}` (`decide_update`) approves (the version goes live, the
   price applies) or rejects (the version becomes `rejected`, the price is dropped, the maker reads
-  `listing.update.reason`). Unlisting or a rejected listing releases what waits
-  (`_release_update`): an unlisted tool is self-serve. The approved capability stays across an
-  approved update; the admin changes it by approving the listing again.
+  `listing.update.reason`). `_hold_for_review` and `set_price` key on `HubListing.reviewed`, set by
+  the first approval and never cleared (round 5): unlisting a reviewed tool only moves it to state
+  `unlisted` (out of search; listing again restores `approved` with no new review), and a rejection
+  that takes an approval back keeps it reviewed, so neither is a way round the review. A request
+  never approved is deleted by unlisting, and that tool stays self-serve. A rejection's reason stays
+  on the row while the maker asks again. The approved capability stays across an approved update;
+  the admin changes it by approving the listing again.
+- **Team names** (round 5): a team whose slug or name is `treg`, starts with `treg-`, contains
+  `official`, or equals a catalog provider or platform slug (`reserved_reason`,
+  `signup.reserved_team_names`) cannot be created or renamed to, and cannot publish a hub tool,
+  unless a superadmin acts. A hub id starts with the team slug, so such a team would publish tools
+  that pass for treg's or a provider's own. The email-derived default team of a new user falls back
+  to `team-<user id>`.
+- **What a run charges** (round 5): an answer whose every declared output field is empty (None,
+  "", [], {}) settles the seller price at 0 whatever the script charged (`runner._empty_answer`).
+  The price line carries the provider-fee limit (`fees_label`: "+ provider fees up to $1 a run", the
+  tool's `limits.cost_usd` or the runner's default) and `PAY_NOTE` replaces "you pay only what
+  completes": a failed run pays no seller price but pays the provider fees of the steps that ran.
+  The public price (`price_ranges`) rests on runs by other teams once there are any, else on the
+  maker's own runs and checks, marked `price_from_tests` and "(from the maker's own tests)". The
+  contract names the hosts of the maker's own tools a version calls (`own_hosts`,
+  `sends_inputs_to`): a caller's inputs reach them, and they can change with no new version.
 - **The public share page** `GET /hub/<id>` (and `.md`; `@N`): the contract for a person or an
   agent on the public stylesheet; the price as the mode and the worst case ("seller $X per unit,
   up to $Y per run"; the schema.org Offer carries the worst case); the RUN LOG when the maker left

@@ -591,6 +591,9 @@ async def test_catalog_get_answers_for_a_hub_id_and_hides_what_the_maker_hides(c
     assert e["call_template"]["cli"].startswith(f"treg call {tool_id} --data")
     assert e["page"].endswith(f"/hub/{tool_id}") and e["readme"] == "About it."
     text = r.text
+    # the maker's own server is disclosed by host (a caller's inputs reach it); the tool names are not
+    assert e["sends_inputs_to"] == ["x.supabase.co"]
+    text = text.replace("x.supabase.co", "")
     assert "supabase" not in text and "tikhub" not in text          # the maker's tools are not on the contract
     assert "script" not in e or e.get("script") is None
     # not in search, only by id
@@ -650,6 +653,8 @@ async def test_the_public_page_shows_the_contract_and_hides_the_makers_side(clie
     assert "<b>returns</b>" in html and "<code>code</code>" in html and "<li>one</li>" in html   # the readme, rendered
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html                  # and escaped
     assert '<meta name="robots" content="noindex"/>' in html
+    assert "sends your inputs to the maker&#39;s own server at <b>x.supabase.co</b>" in html   # disclosed by host
+    html = html.replace("x.supabase.co", "")
     assert "supabase" not in html and "tikhub" not in html and "SUPABASE" not in html          # the maker's tools and keys
     assert "made of 2 tool(s)" in html
     assert "run at publish" in html and "passed" in html                                          # the check trace
@@ -661,7 +666,8 @@ async def test_the_public_page_has_a_markdown_twin(clients: AsyncClient, hub_on,
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/markdown")
     assert r.headers.get("x-robots-tag") == "noindex"
     assert r.text.startswith("# leads-db") and "## Call it" in r.text and "| domain |" in r.text
-    assert "supabase" not in r.text
+    assert "sends your inputs to the maker's own server at x.supabase.co" in r.text
+    assert "supabase" not in r.text.replace("x.supabase.co", "")
 
 
 async def test_the_public_page_is_404_when_off_failed_or_unknown(clients: AsyncClient, hub_on, platform_on, monkeypatch):
@@ -956,7 +962,9 @@ async def test_every_price_surface_leads_with_the_observed_range(clients: AsyncC
     tool_id = await _publish_script_priced(clients, monkeypatch, 0.5, PER_ITEM, n=3)
     row = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
     # the publish check was the maker's own run: 3 rows charged $0.006 on top of the $0.001 step
-    assert row["price_samples"] >= 1 and row["price_range"] == "$0.007/run so far · seller up to $0.5 a run"
+    # only the maker's own check run so far: the figure says so
+    assert row["price_samples"] >= 1 and row["price_range"] == "$0.007/run so far · seller up to $0.5 a run (from the maker's own tests)"
+    assert row["price_from_tests"] is True
     page = (await clients.get(f"/hub/{tool_id}.md")).text
     assert f"**Price:** {row['price_range']}" in page
     got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]
@@ -1028,7 +1036,7 @@ async def test_only_an_approved_tool_is_in_search(clients: AsyncClient, hub_on, 
     body = (await clients.get("/catalog/search", params={"q": Q_OWN_WORDS})).json()
     row = [r for r in body["results"] if r["id"] == tool_id][0]
     assert row["kind"] == "hub" and row["provider"] and row["price_line"].startswith("seller ")
-    assert row["cost"]["usd"] == 0.011 and row["price_range"] == "$0.011/run" and "score" in row and "script" not in row and "uses" not in row
+    assert row["cost"]["usd"] == 0.011 and row["price_range"] == "$0.011/run (from the maker's own tests)" and "score" in row and "script" not in row and "uses" not in row
     assert body["hints"][0] == f"treg catalog get {tool_id}   # params, cost and an example response" or tool_id in json.dumps(body["hints"])
     assert (await clients.delete(f"/hub/tools/{tool_id}")).status_code == 200      # retired never appears
     assert tool_id not in await _search_ids(clients)
@@ -1045,7 +1053,9 @@ async def test_a_rejection_carries_a_reason_and_listing_again_asks_again(clients
     queue = (await clients.get("/admin/hub/listings", params={"state": "rejected"}, headers={"X-Treg-Token": ADMIN})).json()
     assert [q["tool_id"] for q in queue] == [tool_id] and queue[0]["price_label"] == "$0.01 a run"
     r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
-    assert r.json()["listing"] == {**r.json()["listing"], "state": "requested", "reason": "", "decided_at": None}
+    # asking again keeps the last reason, so the maker can still read what to fix
+    assert r.json()["listing"] == {**r.json()["listing"], "state": "requested",
+                                   "reason": "the summary does not say what it returns", "decided_at": None}
     queue = (await clients.get("/admin/hub/listings", headers={"X-Treg-Token": ADMIN})).json()
     assert [q["tool_id"] for q in queue] == [tool_id]
     # unlisting withdraws it: nothing left to decide
@@ -1132,20 +1142,38 @@ async def test_a_price_change_on_a_listed_tool_waits_for_review(clients: AsyncCl
     assert run.json()["usage"]["price_micro"] == 500_000
 
 
-async def test_leaving_search_releases_what_waits(clients: AsyncClient, hub_on, platform_on, monkeypatch):
-    """An unlisted tool is self-serve: unlisting (or a rejected listing) lets the waiting version
-    and price through, as they would have gone for a tool nobody can find."""
+async def test_unlisting_an_approved_tool_keeps_it_under_review(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 2: approve, unlist, then change was a way round the review. Now an approved
+    tool stays reviewed: unlisted, it is out of search, callers by id keep the approved version and
+    price, and every change still waits. Listing it again needs no new review."""
     pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
     tool_id = pub["tool_id"]
     await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
     await _decide(clients, monkeypatch, tool_id, "approve")
-    await _v2(clients, tool_id)
-    await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.02})
-    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": False})
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": False})
+    assert r.json()["listing"]["state"] == "unlisted" and r.json()["listed"] is False
+    assert tool_id not in await _search_ids(clients)
+    assert (await _v2(clients, tool_id)).json()["status"] == "review"
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.5})
+    assert r.json()["pending_price_usd"] == 0.5
     got = (await clients.get(f"/catalog/endpoints/{tool_id}")).json()["endpoint"]
-    assert got["version"] == 2 and got["price_line"].startswith("seller $0.02 a run")
-    # an unlisted tool's next version goes live at once
-    assert (await _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, v3.")).json()["status"] == "live"
+    assert got["version"] == 1 and got["price_line"].startswith("seller $0.01 a run")
+    queue = (await clients.get("/admin/hub/updates", headers={"X-Treg-Token": ADMIN})).json()
+    assert [u["tool_id"] for u in queue] == [tool_id]
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    assert r.json()["listing"]["state"] == "approved" and tool_id in await _search_ids(clients)
+    # a rejection that takes the approval back keeps the review too
+    await _decide(clients, monkeypatch, tool_id, "reject", "not now")
+    assert (await _v2(clients, tool_id, summary="Decision makers of a company, with verified emails, v3.")).json()["status"] == "review"
+
+
+async def test_a_request_never_approved_is_withdrawn_by_unlisting(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"listed": True})
+    r = await clients.patch(f"/hub/tools/{tool_id}", json={"listed": False})
+    assert r.json()["listing"] == {"state": "none"}
+    assert (await _v2(clients, tool_id)).json()["status"] == "live"               # never reviewed: self-serve
 
 
 async def test_the_review_queue_is_superadmin_only(clients: AsyncClient, hub_on, platform_on, monkeypatch):
@@ -1462,3 +1490,76 @@ async def test_an_approved_tool_stays_visible_in_its_jobs_search_group(clients: 
         + [{"id": "h", "kind": "hub", "capability": "c"}]
     out = group_routed(rows, max_children=5)
     assert "h" in [r["id"] for r in out] and out[0]["children_hidden"] == 1
+
+
+async def test_the_public_price_follows_other_teams_runs_once_there_are_any(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 2: the maker's own free runs shaped the public figure. Once another team
+    has paid for a run, only such runs count."""
+    tool_id = await _publish_script_priced(clients, monkeypatch, 0.5, PER_ITEM, n=5)
+    for _ in range(3):                                              # the maker's own runs: 5 rows, $0.011
+        assert (await clients.post(f"/call/{tool_id}", json={})).status_code == 200
+    mine = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
+    assert mine["price_from_tests"] is True
+    monkeypatch.setattr(call_service, "relay", _fake_relay(200, b'{"data": [1, 1]}'))
+    hdr = {"X-Treg-Token": (await funded_user(clients, "public-price@example.com"))["token"]}
+    assert (await clients.post(f"/call/{tool_id}", json={}, headers=hdr)).status_code == 200   # 2 rows: $0.005
+    mine = [t for t in (await clients.get("/hub/tools/mine")).json() if t["tool_id"] == tool_id][0]
+    assert mine["price_from_tests"] is False and mine["price_samples"] == 1
+    assert mine["price_range"] == "$0.005/run so far · seller up to $0.5 a run"
+
+
+async def test_an_empty_answer_pays_no_seller_price(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 2: a fee was taken for an answer whose every field was null."""
+    script = ("export default async function run(ctx) {"
+              "  ctx.charge(0.05, 'fee');"
+              "  return ctx.inputs.search === 'none' ? { rows: null, count: null } : { rows: [1], count: 1 };"
+              "}")
+    tool_id = await _publish_script_priced(clients, monkeypatch, 0.5, script, n=1)
+    hdr = {"X-Treg-Token": (await funded_user(clients, "empty-answer@example.com"))["token"]}
+    full = await clients.post(f"/call/{tool_id}", json={}, headers=hdr)
+    assert full.status_code == 200 and full.json()["usage"]["price_micro"] == 50_000
+    empty = await clients.post(f"/call/{tool_id}", json={"search": "none"}, headers=hdr)
+    assert empty.status_code == 200 and empty.json()["usage"]["price_micro"] == 0
+    from treg.application.hub.runner import _empty_answer
+    assert _empty_answer({"rows": [], "count": 0}, ["rows", "count"]) is False            # 0 is an answer
+
+
+# ---------------------------------------------------------------------------------------------
+# Team names (hub simulation run 2): a team named treg, official, or a catalog provider would let a
+# stranger's hub tool pass for ours or theirs.
+
+@pytest.mark.parametrize("name", ["treg", "treg-official", "Treg Hub Verified", "Acme Official Data", "tikhub"])
+async def test_a_reserved_team_name_is_refused(clients: AsyncClient, name):
+    r = await clients.post("/orgs", json={"name": name})
+    assert r.status_code == 422 and "reserved" in r.text, r.text
+
+
+async def test_a_rename_to_a_reserved_slug_is_refused(clients: AsyncClient):
+    org_id = (await clients.get("/orgs")).json()[0]["org_id"]
+    r = await clients.patch(f"/orgs/{org_id}", json={"slug": "treg"})
+    assert r.status_code == 400 and "reserved" in r.text
+    r = await clients.patch(f"/orgs/{org_id}", json={"name": "Treg Official"})
+    assert r.status_code == 400 and "reserved" in r.text
+
+
+async def test_a_team_with_a_reserved_name_cannot_publish(clients: AsyncClient, hub_on):
+    """Teams made before the rule keep their name; their hub tools are refused at publish."""
+    from sqlalchemy import update
+    from treg.infra.db import session_maker
+    from treg.models import Org
+    org_id = (await clients.get("/orgs")).json()[0]["org_id"]
+    async with session_maker() as s:
+        await s.execute(update(Org).where(Org.id == org_id).values(name="treg"))
+        await s.commit()
+    await _own_supabase(clients)
+    r = await clients.post("/hub/tools", json={"manifest": _steps_manifest(), "check": CHECK, "readme": "x"})
+    assert r.status_code == 403 and r.json()["detail"]["error"] == "team_name_reserved"
+
+
+async def test_a_publish_that_changes_the_price_says_so(clients: AsyncClient, hub_on, platform_on, monkeypatch):
+    """Hub simulation run 2: a new version's recipe.json price undid `treg hub price` silently."""
+    pub = await _live_tool_with_readme(clients, monkeypatch, price=0.01)
+    tool_id = pub["tool_id"]
+    await clients.patch(f"/hub/tools/{tool_id}", json={"price_usd": 0.05})
+    r = await _v2(clients, tool_id)                                            # recipe.json still says $0.01
+    assert "$0.05 a run -> $0.01 a run" in r.json()["price_note"]

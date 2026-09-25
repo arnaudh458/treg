@@ -57,6 +57,22 @@ async def _publish(body: PublishIn, request: Request, caller: Caller, db: AsyncS
             HubTool.org_id == caller.org_id, HubTool.name == name).limit(1))).scalar_one_or_none()
         if exists is None:
             raise HTTPException(status_code=404, detail=f"your team has no hub tool named {name!r}; POST /hub/tools creates one")
+    # A team whose name reads as treg, as official, or as a catalog provider publishes only by a
+    # superadmin: its tools would pass for ours or theirs (hub simulation run 2). Teams made before
+    # the name rule keep their name; this stops their tools.
+    from ..application.signup import reserved_team_names
+    from ..domain.governance.teams import reserved_reason
+    why = reserved_reason(caller.org.slug, reserved_team_names()) or reserved_reason(caller.org.name, reserved_team_names())
+    if why and not caller.user.is_superadmin:
+        raise HTTPException(status_code=403, detail={"error": "team_name_reserved", "rule": why +
+                            "; rename the team (treg org rename) before publishing a hub tool"})
+    # The serving version's price before this publish: a new version's recipe.json replaces it, which
+    # undid a `treg hub price` without a word (hub simulation run 2).
+    name = body.manifest.get("name") if isinstance(body.manifest, dict) else None
+    before = (await db.execute(select(HubTool).where(
+        HubTool.org_id == caller.org_id, HubTool.name == name, HubTool.status == "live")
+        .order_by(HubTool.version.desc()).limit(1))).scalars().first() if name else None
+    before_label = hub_app.price_label(before.manifest) if before is not None else None
     try:
         published = await hub_app.publish(
             db, org=caller.org, maker_email=caller.email,
@@ -78,6 +94,10 @@ async def _publish(body: PublishIn, request: Request, caller: Caller, db: AsyncS
     await db.commit()
     out = {"tool_id": published.tool_id, "version": published.version, "status": row.status,
            "kind": published.kind, "check": verdict}
+    after_label = hub_app.price_label(row.manifest)
+    if before_label is not None and before_label != after_label:
+        out["price_note"] = (f"this version's price comes from recipe.json: {before_label} -> {after_label}. "
+                             "A price set with `treg hub price` does not carry over to a new version.")
     if row.status == "live":
         out["call"] = f"POST /call/{published.tool_id}"
         out["page"] = f"{get_settings().public_url.rstrip('/')}/hub/{published.tool_id}"

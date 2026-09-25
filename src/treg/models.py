@@ -1344,6 +1344,10 @@ class HubListing(SQLModel, table=True):
     pending_version: int = Field(default=0)
     pending_pricing: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     update_reason: str = Field(default="")
+    # Set by the first approval and never cleared (hub simulation run 2): an approved tool stays
+    # under review for good. Unlisting it only hides it (state `unlisted`); its new versions and
+    # prices still wait, so "approve, unlist, change" is not a way round the review.
+    reviewed: bool = Field(default=False)
 
 
 class HubRun(SQLModel, table=True):
